@@ -1,2 +1,0 @@
-"""Jarvix source package root."""
-

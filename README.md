@@ -1,180 +1,81 @@
-# Jarvix V.01
+# Jarvix
 
-Jarvix is a local-first desktop AI assistant starter inspired by JARVIS-style
-workflows. V.01 is intentionally realistic: it gives you a clean desktop app,
-AI chat, local notes, voice input, text-to-speech, simple app/website actions,
-system info, and a safety-first command runner without pretending to be a
-movie-level AI.
+Jarvix is a local-first desktop AI assistant built with Python, PySide6 and SQLite. Version 0.2.0 grows the original assistant into a permission-aware desktop operator with structured tools, local storage and a broader Windows-ready interface.
 
-Current version: `0.1.0`
+## What's new in 0.2.0
 
-## What Jarvix Can Do
+- 164 registered, schema-validated tools for files, apps, windows, system information, notes, tasks, projects, developer workflows and more.
+- A guided Actions panel for running local tools, plus a command palette and quick navigation.
+- Push-to-talk microphone input, response playback, a notification center and optional system-tray behavior.
+- Workspaces, application discovery and aliases, file previews and summaries, clipboard history, screenshots, and multi-step automations.
+- OpenAI and Gemini provider adapters, credential storage through the operating-system vault, and explicit context previews before local data is shared with a provider.
+- A portable Windows build alongside the source installation.
 
-- Chat with Gemini or OpenAI using API keys from your shell environment.
-- Run local chat actions such as opening websites, opening apps, and doing math.
-- Accept push-to-talk voice input and send the transcript into the chat workflow.
-- Speak responses through local text-to-speech.
-- Create and search local SQLite notes.
-- Show CPU, RAM, battery, and storage information.
-- Open macOS apps and websites only after confirmation.
-- Validate and run a tiny allowlist of safe read-only commands with confirmation.
-- Present a modern liquid-glass PySide6 interface with sidebar navigation and a
-  right utility rail.
+## What got revamped
 
-## Safety
+- The original small chat/action router has become a service-based application with an orchestrator, tool registry, provider adapters, background workers and reusable capability services.
+- SQLite storage now covers conversations, notes, tasks, projects, memories, permissions, activity and automation metadata, with an additive migration from the earlier database.
+- Computer and file operations use structured arguments and scoped roots; destructive actions require fresh confirmation, and screen, clipboard and microphone access begin disabled.
+- The desktop app now has 13 sections for Home, Chat, Voice, Tasks, Memory, Notes, Files, Apps, Automations, Integrations, System, Activity and Settings.
 
-- Jarvix does not read passwords, cookies, tokens, banking data, or private accounts.
-- API keys are read from environment variables only.
-- AI chat cannot run shell commands automatically.
-- Commands require confirmation in the UI and pass through a strict allowlist.
-- Dangerous commands, shell metacharacters, redirects, pipes, network tools, and
-  sensitive credential-related strings are blocked.
-- Local databases, virtual environments, and real `.env` files are ignored by Git.
+## Install on Windows
 
-## Requirements
+Download and extract `Jarvix-0.2.0-windows-x64.zip` from the [latest GitHub release](https://github.com/zyadd1111111/Jarvix/releases/latest), then run `Jarvix\Jarvix.exe`. Keep the extracted folder together, including `_internal`. This is an unsigned portable build. You can also run the locally built `dist\Jarvix\Jarvix.exe`.
 
-- macOS for V.01 app launching behavior.
-- Python `3.11+`; tested locally with Python `3.13.3`.
-- A Gemini API key or OpenAI API key for live AI chat.
-- Microphone permission if you want voice input.
+## Install from source
 
-## Install
+Requires Python 3.11 or newer. From the repository directory:
 
-```bash
-cd /Users/zain/Documents/Jarvix
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -e ".[dev]"
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+.\.venv\Scripts\python.exe -m jarvix
 ```
 
-## Configure Gemini
+On macOS or Linux, activate the virtual environment with `source .venv/bin/activate`, install with `python -m pip install -e ".[dev]"`, then run `python -m jarvix`. Local tools work without an AI key; configure an OpenAI or Gemini key in Settings to use cloud chat. `requirements-lock.txt` records the verified dependency set. `scripts\launch.ps1` starts Jarvix without a console on Windows.
 
-```bash
-export JARVIX_AI_PROVIDER="gemini"
-export JARVIX_MODEL="gemini-3.5-flash"
-export GEMINI_API_KEY="your-key"
+Use `--data-dir .\artifacts\test-profile` for an isolated profile. Storage otherwise defaults to `%LOCALAPPDATA%\Jarvix\jarvix.db` on Windows or the platform's user data directory.
+
+## First run
+
+1. Add file roots under Settings before using file or developer tools. Protected paths, links and junctions are rejected.
+2. Enable computer control only when needed. Clipboard, screen and microphone permissions start off.
+3. Use **Actions** or **Ctrl+Shift+K** to inspect a tool's arguments and run it locally. Optional fields are omitted unless selected; complex arrays use JSON.
+4. Configure an OpenAI or Gemini key in Settings. Keys use the OS vault, and environment keys take precedence. Local results are previewed before any are shared with a provider.
+5. Select a microphone and hold to talk. Transcription uses an installed Windows speech language locally and does not submit messages automatically.
+
+**Ctrl/Cmd+K** searches pages, apps, files, tasks, notes, projects, routines and tools. **Ctrl+N** starts a conversation; **Alt+Left/Right** navigates section history. Window geometry and the last section persist. Close-to-tray is optional.
+
+## Capabilities
+
+| Area | Available behavior |
+| --- | --- |
+| Computer | App discovery, aliases, favorites, groups; window focus, minimize, maximize, restore, close and foreground inspection |
+| Files | Filtered, largest and recent listings; duplicates, summaries, create/copy/move/rename, batch previews, organization, undo, ZIP, recycling, text/JSON/CSV previews and PDF metadata |
+| System | CPU/RAM/processes, storage, battery, adapters, uptime, devices, monitors, GPU/audio information, volume/media, confirmed termination and power operations |
+| Clipboard and screen | Explicit read/write/capture/history/pinning/classification, note/task conversion, selected monitor/window screenshots and local history |
+| Productivity | Task priorities/tags/projects/subtasks/recurrence/views; note folders/tags/pins/versions/export; memory categories/importance/expiry; project summaries |
+| Developer | Language/Git inspection, safe status/diff/search, Python/Node/Lua initializers, confirmed argv commands, incremental output, cancellation and history |
+| Workspaces and browser | Configured apps/folders/sites/notes/routines, bookmarks/site groups and explicitly imported history; browser actions open URLs without scraping |
+| Automation | Manual multi-action routines, eleven trigger types, previews/history/templates; scheduled actions are limited to local summaries and notifications |
+| Desktop and chat | Conversation search/pin/rename/delete/export, edit/regenerate branches, task/note conversion, Markdown, local tool timeline, context inspector, notification inbox and tray |
+
+Gmail, Calendar, Drive, GitHub, Spotify and Discord have an adapter/credential boundary and show **Not connected** until configured. No account results are simulated.
+
+## Safety and local data
+
+Level 1 reads run immediately. Level 2 reversible actions require normal control or one-time approval. Level 3 always requires fresh confirmation; saved grants cannot bypass it. Configured app arguments require confirmation on every launch. Cloud disclosure is separate. Clipboard history is never monitored passively.
+
+SQLite is not encrypted. Credentials have no plaintext fallback. Close Jarvix before manually copying its profile for backup. Tools call services; UI calls the application facade; providers never control the OS. The agent defaults to six model rounds, twelve model tool calls and thirty-two nested operations. Cancellation and deadlines are shared across nested actions.
+
+## Verify and build
+
+```powershell
+.\.venv\Scripts\ruff.exe check src tests scripts
+.\.venv\Scripts\python.exe -m pytest -q
+.\scripts\build.ps1
 ```
 
-Gemini API keys from Google AI Studio can start with `AQ` for newer auth keys or
-`AIza` for older standard keys.
+Tests use isolated profiles, mocked provider HTTP and mocked destructive OS actions. Windows native read-only checks and packaged startup are verified separately. Live paid-provider requests and real microphone recognition need user hardware/accounts.
 
-Copy a key to your clipboard, then set and check it without printing the secret:
-
-```bash
-export GEMINI_API_KEY="$(pbpaste | tr -d '\n\r')"
-python -c "import os; k=os.getenv('GEMINI_API_KEY',''); print('gemini key set:', bool(k), 'starts right:', k.startswith(('AQ','AIza')), 'length:', len(k))"
-```
-
-## Configure OpenAI
-
-```bash
-export JARVIX_AI_PROVIDER="openai"
-export JARVIX_MODEL="gpt-5.5"
-export OPENAI_API_KEY="your-key"
-```
-
-Jarvix will still launch without an API key and will show a Settings warning.
-
-## Run
-
-```bash
-python src/main.py
-```
-
-Or after editable install:
-
-```bash
-python -m main
-```
-
-## Chat Actions
-
-The Chat tab handles a few safe local actions directly before falling back to the
-AI provider:
-
-```text
-open youtube
-can you open a new tab for github
-launch app Calculator
-calculate 15% of 200
-what is 2 plus 2
-```
-
-Website and app launches still ask for confirmation before Jarvix opens anything.
-Voice transcription is sent through the same chat workflow.
-
-## Safe Commands
-
-The System tab can run only a tiny read-only allowlist after confirmation:
-
-```text
-pwd
-ls
-ls -la
-date
-whoami
-uptime
-df -h
-uname -s
-python3 --version
-```
-
-Everything else is blocked in V.01.
-
-## Test
-
-```bash
-pytest
-```
-
-The core service tests do not require desktop, voice, Gemini, or OpenAI credentials.
-
-## v1 Features
-
-- PySide6 desktop window with Chat, Voice, Notes, Apps, System, and Settings sections
-- Liquid-glass dark UI with chat bubbles, sidebar status card, and utility rail
-- OpenAI Responses API or Gemini Interactions API chat client with environment-only secrets
-- SQLite-backed notes at `data/jarvix.db`
-- faster-whisper push-to-talk transcription wrapper
-- sounddevice/soundfile microphone capture for push-to-talk voice input
-- pyttsx3 text-to-speech wrapper
-- macOS app launcher and safe website launcher
-- psutil system snapshot for CPU, RAM, battery, and storage
-- safe command validation and confirmation-based command execution
-
-## Important Files
-
-```text
-src/main.py                 App entrypoint
-src/ui/main_window.py        PySide6 desktop UI
-src/ai/client.py             Gemini/OpenAI provider wrapper
-src/tools/chat_actions.py    Chat action router for local tasks
-src/tools/calculator.py      Safe arithmetic evaluator
-src/memory/notes_store.py    SQLite notes storage
-src/safety/command_safety.py Safe command allowlist
-tests/                       Automated tests
-```
-
-## Not in v1
-
-- Browser automation
-- Calendar integration
-- Email sending
-- File search
-- Project memory
-- Plugin system
-
-## GitHub Release Commands
-
-For maintainers publishing V.01:
-
-```bash
-git status -sb
-PYTHONPATH=src python -m pytest -q
-git add -A
-git commit -m "Release Jarvix V.01"
-git tag -a v0.1.0 -m "Jarvix V.01"
-git push -u origin main
-git push origin v0.1.0
-```
+Wake words, visual AI/OCR, image attachments, token streaming, deep browser control, account actions, recycle restoration and scheduling while closed remain unimplemented. Screenshots are local captures; PDF support is metadata inspection. Stop prevents subsequent work, but an active HTTP read may wait for its timeout. Completed side effects are not automatically rolled back. See [SECURITY.md](SECURITY.md) and [the operator checkpoint](docs/OPERATOR-CHECKPOINT.md).

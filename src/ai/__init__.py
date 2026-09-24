@@ -1,2 +1,0 @@
-"""AI chat client layer."""
-

@@ -1,2 +1,0 @@
-"""Local memory and notes."""
-

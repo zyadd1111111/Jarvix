@@ -1,18 +1,15 @@
-# Python
+.venv/
 __pycache__/
 *.py[cod]
 .pytest_cache/
-.mypy_cache/
 .ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
 *.egg-info/
-
-# Virtual environments
-.venv/
-venv/
-
-# Local Jarvix data
-data/*.db
-data/*.db-*
-
-# Environment files with real secrets
 .env
+*.db
+*.db-shm
+*.db-wal
+artifacts/
