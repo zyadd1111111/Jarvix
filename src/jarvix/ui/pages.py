@@ -97,14 +97,16 @@ class HomePage(Page):
         hl.addWidget(label("What would you like to move forward?", "Title", True))
         entry = QHBoxLayout()
         self.command = QLineEdit()
-        self.command.setPlaceholderText("Ask Jarvix, find a project, or create something…")
-        self.command.setMinimumHeight(43)
+        self.command.setPlaceholderText("Ask Jarvix or tell it to do something…")
+        self.command.setMinimumHeight(49)
         self.command.returnPressed.connect(self.submit)
         entry.addWidget(self.command)
-        entry.addWidget(button("Start conversation  ↗", self.submit, "Primary"))
+        entry.addWidget(button("Ask Jarvix  ↗", self.submit, "Primary"))
         hl.addLayout(entry)
         hl.addWidget(label("Local workspace ready  ·  You control every external tool result", "Muted"))
         self.body_layout.addWidget(hero)
+        self.operator_panel, self.operator_layout = panel()
+        self.body_layout.addWidget(self.operator_panel)
         self.metrics = QHBoxLayout()
         self.body_layout.addLayout(self.metrics)
         split = QHBoxLayout()
@@ -128,6 +130,12 @@ class HomePage(Page):
         right.addWidget(self.connections_panel)
         self.activity_panel, self.activity_layout = panel()
         right.addWidget(self.activity_panel)
+        self.workspace_panel, self.workspace_layout = panel()
+        left.addWidget(self.workspace_panel)
+        self.automation_panel, self.automation_layout = panel()
+        right.addWidget(self.automation_panel)
+        self.favorites_panel, self.favorites_layout = panel()
+        right.addWidget(self.favorites_panel)
         left.addStretch()
         right.addStretch()
         self.body_layout.addStretch()
@@ -152,6 +160,19 @@ class HomePage(Page):
         greeting = "Good morning" if now.hour < 12 else "Good afternoon" if now.hour < 18 else "Good evening"
         self.greeting.setText(greeting + ". Your workspace is ready.")
         self.date_label.setText(now.strftime("%A, %B %d  ·  %I:%M %p"))
+        self.section(self.operator_layout, "Operator session")
+        sessions = self.services.operator.list() if hasattr(self.services, "operator") else []
+        current = next((row for row in sessions if row.get("status") in {"running", "paused", "planning"}),
+                       sessions[0] if sessions else None)
+        if current:
+            steps = current.get("steps", [])
+            done = sum(step.get("status") in {"completed", "succeeded", "complete"} for step in steps)
+            self.operator_layout.addWidget(label(current.get("goal", "Operator task"), wrap=True))
+            self.operator_layout.addWidget(label(f"{current.get('status', 'ready').capitalize()} · {done}/{len(steps)} steps", "Accent"))
+            self.operator_layout.addWidget(button("View timeline and controls", lambda r=current: self.window.open_operator(r["id"]), "Quiet"))
+        else:
+            self.operator_layout.addWidget(label("Ready for your next task. Plans and progress stay visible here.", "Muted", True))
+            self.operator_layout.addWidget(button("Open operator sessions", self.window.open_operator, "Quiet"))
         tasks = self.services.list_tasks()
         pending = [item for item in tasks if item.get("status") not in ("done", "completed")]
         notes = self.services.list_notes()
@@ -166,13 +187,14 @@ class HomePage(Page):
             layout.addLayout(row)
             layout.addWidget(label(title, "Eyebrow"))
             self.metrics.addWidget(frame)
-        self.section(self.tasks_layout, "Next up", "Tasks")
-        for task in pending[:4]:
+        today_tasks = self.services.productivity.tasks.search(view="today")["items"]
+        self.section(self.tasks_layout, "Today's tasks", "Tasks")
+        for task in today_tasks[:4]:
             self.tasks_layout.addWidget(label("○  " + task["title"], wrap=True))
             if task.get("due_at"):
                 self.tasks_layout.addWidget(label("     Reminder · " + pretty_date(task["due_at"]), "Muted"))
-        if not pending:
-            self.tasks_layout.addWidget(label("A clear slate. Add a task to keep your next step close.", "Muted", True))
+        if not today_tasks:
+            self.tasks_layout.addWidget(label("No open tasks due today. Add a task or review your upcoming work.", "Muted", True))
             self.tasks_layout.addWidget(button("Create a task", lambda: self.window.navigate("Tasks"), "Quiet"))
         self.section(self.history_layout, "Conversations", "Chat")
         for conversation in self.services.list_conversations()[:3]:
@@ -219,6 +241,30 @@ class HomePage(Page):
             self.activity_layout.addWidget(label(pretty_date(item.get("created_at")), "Muted"))
         if not activity:
             self.activity_layout.addWidget(label("Your actions and AI tool decisions will appear here.", "Muted", True))
+        self.section(self.workspace_layout, "Workspaces & routines")
+        for workspace in self.services.records.list("workspace")[:4]:
+            self.workspace_layout.addWidget(button(workspace["name"], lambda r=workspace:
+                self.window.open_capabilities("workspaces.launch", {"id": r["id"]}), "Quiet"))
+        workflows = self.services.workflows.list() if hasattr(self.services, "workflows") else []
+        for routine in [row for row in workflows if row.get("kind") == "routine"][:3]:
+            self.workspace_layout.addWidget(button(routine["name"], lambda r=routine:
+                self.window.open_capabilities("workflows.run", {"id": r["id"]}), "Quiet"))
+        self.workspace_layout.addWidget(button("Save current setup", lambda: self.window.open_capabilities("workspaces.capture"), "Quiet"))
+        self.workspace_layout.addWidget(button("Manage workspaces", self.window.open_workspaces, "Quiet"))
+        self.section(self.automation_layout, "Automation runtime", "Automations")
+        active = sum(bool(row.get("enabled")) for row in workflows)
+        background = getattr(self.services, "background", None)
+        self.automation_layout.addWidget(label(f"{active} enabled · {'Background runtime active' if background and background.running else 'Runtime idle'}", "Muted", True))
+        unread = self.services.notifications.list(unread_only=True, limit=3)
+        for notification in unread:
+            self.automation_layout.addWidget(button(notification["title"], self.window.open_notifications, "Quiet"))
+        self.section(self.favorites_layout, "Favorite applications", "Apps")
+        favorites = self.services.apps.list(favorites_only=True)["items"]
+        for app in favorites[:4]:
+            self.favorites_layout.addWidget(button(app["name"], lambda r=app:
+                self.window.open_capabilities("apps.open", {"id": r["id"]}), "Quiet"))
+        if not favorites:
+            self.favorites_layout.addWidget(label("Favorite applications in Apps for quick access.", "Muted", True))
 
 
 class NotesPage(Page):
@@ -468,6 +514,8 @@ class FilesPage(Page):
         self.entries = table(["Name", "Location", "Size", "Modified"])
         self.entries.cellDoubleClicked.connect(self.show_file)
         self.layout.addWidget(self.entries, 2)
+        self.layout.addWidget(button("Use selected file as context", self.use_file_context, "Quiet"),
+                              alignment=Qt.AlignmentFlag.AlignRight)
         project_row = QHBoxLayout()
         project_row.addWidget(label("PROJECTS", "Eyebrow"))
         project_row.addStretch()
@@ -530,6 +578,16 @@ class FilesPage(Page):
             record = item.data(Qt.ItemDataRole.UserRole)
             TextPreview(record.get("name", "File"), "Indexed metadata. This does not read or send the file contents.", json.dumps(record, indent=2, default=str), self).exec()
 
+    def use_file_context(self):
+        row = selected_record(self.entries)
+        if not row:
+            self.window.notify("Select an indexed file first.")
+        elif not self.services.settings.get("context.enabled", False):
+            self.window.notify("Enable explicit context snapshots in Settings first.")
+        else:
+            self.window.select_context(selected_files=[row["path"]])
+            self.status.setText("Selected for local context. File contents are shared only after approval.")
+
     def add_project(self):
         path = QFileDialog.getExistingDirectory(self, "Choose a project folder")
         if path:
@@ -540,6 +598,7 @@ class FilesPage(Page):
 
     def open_project(self, row, column=0):
         record = self.projects.item(row, 0).data(Qt.ItemDataRole.UserRole)
+        self.window.select_context(project_id=record["id"])
         self.window.open_folder(record["path"])
 
 
@@ -768,11 +827,32 @@ class VoicePage(Page):
 
 class AutomationsPage(Page):
     title = "Automations"
-    subtitle = "Explicit local routines. Scheduled work runs only while Jarvix is open."
+    subtitle = "Build ordered workflows. Jarvix keeps permissions and progress visible."
 
     def __init__(self, window):
         super().__init__(window)
-        frame, layout = panel("Create a routine")
+        toolbar = QHBoxLayout()
+        toolbar.addWidget(button("+ Build workflow", self.window.open_workflow_builder, "Primary"))
+        toolbar.addWidget(button("Create through chat", lambda: self.window.open_chat(
+            "Help me create an automation. Show its trigger, conditions and actions before saving.", send=False)))
+        toolbar.addWidget(button("Import", self.import_workflow, "Quiet"))
+        toolbar.addStretch()
+        self.layout.addLayout(toolbar)
+        self.workflow_search = QLineEdit()
+        self.workflow_search.setPlaceholderText("Search workflows and routines…")
+        self.workflow_search.textChanged.connect(self.refresh_workflows)
+        self.layout.addWidget(self.workflow_search)
+        self.workflow_entries = table(["Workflow", "Trigger", "State", "Next run"])
+        self.workflow_entries.itemDoubleClicked.connect(lambda _item: self.edit_workflow())
+        self.layout.addWidget(self.workflow_entries, 1)
+        actions = QHBoxLayout()
+        for caption, callback in (("Edit", self.edit_workflow), ("Run", lambda: self.workflow_action("run")),
+                                  ("Test", lambda: self.workflow_action("test")), ("History", self.workflow_history),
+                                  ("Enable / disable", self.toggle_workflow), ("Duplicate", lambda: self.workflow_action("duplicate")),
+                                  ("Export", lambda: self.workflow_action("export"))):
+            actions.addWidget(button(caption, callback, "Quiet"))
+        self.layout.addLayout(actions)
+        frame, layout = panel("Simple recurring checks")
         self.name = QLineEdit()
         self.name.setPlaceholderText("Routine name")
         layout.addWidget(self.name)
@@ -786,11 +866,12 @@ class AutomationsPage(Page):
         self.interval.setValue(60)
         self.interval.setSuffix(" minutes")
         row.addWidget(self.interval)
-        row.addWidget(button("Create routine", self.add, "Primary"))
+        row.addWidget(button("Add check", self.add))
         layout.addLayout(row)
         layout.addWidget(label("Only safe, read-only local tools are allowed for unattended runs. Activity records each outcome; the latest result is available below.", "Muted", True))
         self.layout.addWidget(frame)
         self.entries = table(["Routine", "Tool", "Interval", "State", "Last run"])
+        self.entries.setMaximumHeight(155)
         self.layout.addWidget(self.entries)
         row = QHBoxLayout()
         row.addStretch()
@@ -800,7 +881,45 @@ class AutomationsPage(Page):
         self.layout.addLayout(row)
 
     def refresh(self):
+        self.refresh_workflows()
         fill_table(self.entries, self.services.list_automations(), ["name", "tool_name", lambda r: f"{r['interval_minutes']} min", lambda r: "Active" if r.get("enabled") else "Paused", lambda r: pretty_date(r.get("last_run_at"))])
+
+    def refresh_workflows(self, *_):
+        rows = self.services.workflows.list() if hasattr(self.services, "workflows") else []
+        query = self.workflow_search.text().casefold()
+        rows = [row for row in rows if query in (row["name"] + " " + row["trigger"]).casefold()]
+        current = selected_record(self.workflow_entries)
+        fill_table(self.workflow_entries, rows, ["name", "trigger", lambda row: "Enabled" if row["enabled"] else "Disabled",
+                                                lambda row: pretty_date(row.get("next_run"))])
+        if current:
+            for index, row in enumerate(rows):
+                if row["id"] == current["id"]:
+                    self.workflow_entries.selectRow(index)
+
+    def edit_workflow(self):
+        row = selected_record(self.workflow_entries)
+        if row:
+            self.window.open_workflow_builder(row)
+
+    def workflow_action(self, action):
+        row = selected_record(self.workflow_entries)
+        if row:
+            self.window.open_capabilities("workflows." + action, {"id": row["id"]})
+
+    def toggle_workflow(self):
+        row = selected_record(self.workflow_entries)
+        if row:
+            self.window.open_capabilities("workflows.toggle", {"id": row["id"], "enabled": not row["enabled"]})
+
+    def workflow_history(self):
+        from .workflows import WorkflowHistory
+        row = selected_record(self.workflow_entries)
+        if row:
+            WorkflowHistory(self.window, row["id"]).exec()
+
+    def import_workflow(self):
+        from .workflows import import_definition
+        import_definition(self.window)
 
     def add(self):
         name = self.name.text().strip()
@@ -877,6 +996,7 @@ class SettingsPage(Page):
             "automations.enabled": True, "notifications.quiet": False,
             "notifications.dnd": False, "tray.enabled": False,
             "voice.responses": False,
+            "context.enabled": False, "overlay.enabled": False,
         }
         for key, caption in (
             ("control.enabled", "Allow reversible computer actions without individual prompts"),
@@ -888,10 +1008,19 @@ class SettingsPage(Page):
             ("notifications.dnd", "Do not disturb"),
             ("tray.enabled", "Minimize to system tray when closing"),
             ("voice.responses", "Read AI responses aloud automatically"),
+            ("context.enabled", "Allow explicit active-window context requests"),
+            ("overlay.enabled", "Enable the global quick-command overlay shortcut"),
         ):
             check = QCheckBox(caption)
             controls.addWidget(check)
             self.access_checks[key] = check
+        from .overlay import HOTKEYS
+        overlay_row = QHBoxLayout()
+        overlay_row.addWidget(label("Overlay shortcut", "Muted"))
+        self.overlay_hotkey = QComboBox()
+        self.overlay_hotkey.addItems(list(HOTKEYS))
+        overlay_row.addWidget(self.overlay_hotkey)
+        controls.addLayout(overlay_row)
         voice_row = QHBoxLayout()
         voice_row.addWidget(label("Speech voice", "Muted"))
         self.speech_voice = QComboBox()
@@ -938,6 +1067,7 @@ class SettingsPage(Page):
         self.openai_model.setText(settings.get("model.openai", "gpt-4.1-mini"))
         self.gemini_model.setText(settings.get("model.gemini", "gemini-2.5-flash"))
         self.rate.setValue(int(settings.get("speech.rate", 175)))
+        self.overlay_hotkey.setCurrentText(settings.get("overlay.hotkey", "Ctrl+Alt+Space"))
         for key, check in self.access_checks.items():
             check.setChecked(settings.get(key, self.access_defaults[key]))
         voice = settings.get("speech.voice", "")
@@ -992,9 +1122,11 @@ class SettingsPage(Page):
             for key, check in self.access_checks.items():
                 self.services.settings.set(key, check.isChecked())
             self.services.settings.set("speech.voice", self.speech_voice.currentData() or "")
+            self.services.settings.set("overlay.hotkey", self.overlay_hotkey.currentText())
             if not self.access_checks["microphone.enabled"].isChecked():
                 self.window.pages["Voice"].input_panel.cancel()
         if self.guard(persist):
             self.window.update_status()
+            self.window.configure_overlay()
             self.window.pages["Chat"].reload_provider()
             self.window.notify("Settings saved locally.")

@@ -21,6 +21,7 @@ def configure_fonts():
 STYLESHEET = """
 QWidget { background: #0d1016; color: #dce2ef; font-family: 'Segoe UI'; font-size: 13px; }
 QMainWindow, QDialog { background: #0d1016; }
+QDialog#ControlHud, QDialog#CommandOverlay { background: #121925; border: 1px solid #53668f; border-radius: 8px; }
 QLabel { background: transparent; }
 QLabel#Brand { font-size: 20px; font-weight: 700; letter-spacing: 4px; color: #f3f5ff; }
 QLabel#Eyebrow { font-size: 10px; font-weight: 700; color: #7f8bab; letter-spacing: 2px; }

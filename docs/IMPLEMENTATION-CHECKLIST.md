@@ -1,16 +1,16 @@
-# Operator expansion checklist
+# Operator 0.3 checkpoint checklist
 
-Extend the existing 0.1 foundation; preserve profiles and the thirteen-page shell.
+Extend the existing application; preserve profiles and the thirteen-page shell.
 
-- [ ] Three permission levels, immediate sensitive confirmation, bounded/cancellable runs.
-- [ ] Root-confined file operations, previews, reversible history and archive safety.
-- [ ] Native windows/system/clipboard/screen services and explicit opt-in gates.
-- [ ] App discovery, browser shortcuts, reusable workspaces and developer operations.
-- [ ] Task/note/memory/project metadata upgrades with additive migrations.
-- [ ] Microphone adapter and visible listening controls, off by default.
-- [ ] Automation triggers, notification history and manual permission-aware runs.
-- [ ] Chat/history/palette improvements and usable local capability controls.
-- [ ] Targeted security/service tests, full regression suite, Ruff and packaged startup.
+- [x] Preserve three permission levels, allowed roots and separate disclosure approval.
+- [x] Native accessibility targeting, visible control HUD, cancellation and timeouts.
+- [x] Explicit isolated screen capture, accessible text and local Windows OCR.
+- [x] Bounded plans, postconditions, safe recovery, persistent sessions and guarded undo.
+- [x] Workflow triggers/conditions/branches, exact background grants and local routines.
+- [x] Owned background runtime, notifications and clean shutdown.
+- [x] Vertical workflow builder, optional overlay and inspectable context.
+- [x] Workspace project/terminal/layout support, Home data and chat action cards.
+- [x] Focused tests, native owned-window smoke, Ruff and packaged startup.
 
 Completion evidence: implemented capability inventory, meaningful tests, actual Windows
 read-only checks, and a rebuilt executable. External account adapters remain visibly

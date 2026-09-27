@@ -335,7 +335,8 @@ class ScreenshotService(NativeService):
             output.write(data)
         self.services.records.put("screenshot", {"path": str(path), "target": target, **bounds}, record_id)
         return {"id": record_id, "path": str(path), "target": target, **bounds,
-                "note": "Captures visible pixels; overlapping windows may appear."}
+                "note": ("The selected application rendered this isolated window capture; some apps may omit GPU content."
+                         if target == "window" else "Captures visible display pixels; overlapping windows may appear.")}
 
     def history(self, limit=20):
         self._gate()
@@ -415,7 +416,7 @@ def setup(services, registry):
     tool("computer.lock", "Lock the Windows session.", computer.lock, level=2, permission="computer.control")
     tool("computer.power", "Sleep, restart or shut down Windows. ALWAYS confirm immediately first; unsaved work may be lost.", computer.power,
          {"action": enum("sleep", "restart", "shutdown")}, ("action",), 3, "system.power")
-    tool("screen.capture", "Capture a selected monitor, visible window bounds or all displays once into local screenshot history. Requires screen access enabled.",
+    tool("screen.capture", "Capture a selected monitor, isolated window surface or all displays once into local screenshot history. Unsupported window capture fails without a desktop crop. Requires screen access enabled.",
          screenshots.capture, {"target": enum("monitor", "window", "all"), "monitor": integer(0, 63), **window_args},
          level=2, permission="screen.capture")
     tool("screen.history", "List saved local screenshots; no new capture.", screenshots.history,

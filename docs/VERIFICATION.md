@@ -1,26 +1,29 @@
-# Initial foundation verification
+# Jarvix 0.3 — Operator verification
 
-Verified on Windows 10 x64 with Python 3.11.0, PySide6 6.11.2 and PyInstaller 6.22.3. The implementation was built from a fresh directory; no previous Jarvix implementation was reused.
+Checkpoint completed September 27, 2026. Windows 10 x64, Python 3.11.0,
+PySide6 6.11.2 and PyInstaller 6.22.3. Existing architecture and tests preserved.
 
-## Results
+- **396 tests passed, 1 opt-in native test skipped** in the full suite (115.34 seconds).
+  Saved evidence: `artifacts/operator-0.3-tests.log` and `operator-0.3-tests.xml`.
+- The skipped Windows integration test **passed separately** with explicit opt-in.
+  It creates its own Qt windows and checks real UIA typing/invocation, stale identity
+  rejection, password protection, isolated capture under occlusion and local en-US OCR.
+- **Ruff and dependency validation passed.** Read-only native system, app and window
+  checks passed; disabled clipboard/screen gates rejected access.
+- Coverage includes permissions, file roots, structured plans/references, loop detection,
+  postconditions, safe retries, session persistence, undo conflicts, workflow branches,
+  scheduling, cancellation isolation, shutdown and live UI controls. Mocked provider
+  flows cover natural-language automation proposals and fresh save confirmation.
+- **223 registered tools.** All 54 packaged Jarvix Python modules match current source.
+- Windows executable, portable ZIP and Python wheel built successfully. Packaged
+  startup rendered Home using an isolated profile and exited with code 0. Home and
+  the workflow builder were visually checked; the builder also shut down cleanly.
 
-- **149 tests passed**, with successful process exit after Qt teardown.
-- **Ruff passed** for source, tests and Python scripts.
-- Both real AI adapters completed mocked provider → orchestrator → permission → built-in tool → SQLite → final response flows. No live or paid AI calls were made.
-- Twelve desktop tests cover all thirteen requested sections, local editing, no-key chat, permission dialogs on the GUI thread, safe worker shutdown, context exclusion, root revocation, voice status and routine-result inspection.
-- File boundary tests include symlink and Windows junction escapes, root retargeting and revocation during an active scan.
-- Duplicate tool IDs and repeated identical side-effect requests cannot execute the same action twice in one run.
-- Home, Chat, Files and Settings were rendered and visually inspected. Windows offscreen font registration was corrected after the first render.
-- Windows reports installed local System.Speech voices. Speech process behavior, UTF-8 input, rate bounds and stop handling are tested with a subprocess fake; audible playback was not manually evaluated.
-- The Python wheel was built successfully.
-- The packaged Windows executable started, created an isolated SQLite profile, rendered its Home window to `artifacts/packaged-home.png` and exited with **code 0** on September 17, 2026.
+Artifacts: `dist/Jarvix/Jarvix.exe`, `dist/Jarvix-0.3.0-windows-x64.zip`, and
+`dist/jarvix-0.3.0-py3-none-any.whl`. This is an unsigned local build, not a published release.
 
-## Packaging fix
-
-The first packaged startup failed because PyInstaller selected a versioned ICU library from an unrelated Poppler runtime on the machine's PATH. Qt requires the Windows ICU exports. The spec now isolates DLL discovery to the active Python/Qt runtime and Windows directories. The application then started successfully. `scripts/smoke-package.ps1` verifies actual packaged startup and rendering after future builds.
-
-## Remaining validation boundaries
-
-API authentication, paid live model responses, actual email/calendar/Spotify/GitHub connectors, microphone input, background operation after app exit, signed installers and non-Windows deployment are outside this initial verified foundation. The adapters and tool loop are tested offline; production provider accounts and network conditions still need live acceptance testing after keys are configured.
-
-The full capability list and deliberate limits are in the README. Data and permission boundaries are in SECURITY.md.
+Live paid-model calls, actual microphone recognition and external account APIs remain
+unverified. Native control depends on each application's accessibility support; OCR
+needs an installed Windows language. Scheduling requires Jarvix to remain running.
+Other deliberate limits are in README and OPERATOR-CHECKPOINT; permissions and data
+boundaries are in SECURITY.md. No unrelated user windows were captured by native tests.

@@ -16,7 +16,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Wheel build failed.' }
     Copy-Item -LiteralPath 'README.md', 'SECURITY.md', 'LICENSE' -Destination 'dist\Jarvix'
     Copy-Item -LiteralPath 'docs' -Destination 'dist\Jarvix' -Recurse -Force
-    Compress-Archive -LiteralPath 'dist\Jarvix' -DestinationPath 'dist\Jarvix-0.2.0-windows-x64.zip' -Force
+    Compress-Archive -LiteralPath 'dist\Jarvix' -DestinationPath 'dist\Jarvix-0.3.0-windows-x64.zip' -Force
     Write-Host 'Desktop executable: dist\Jarvix\Jarvix.exe'
 }
 finally { Pop-Location }

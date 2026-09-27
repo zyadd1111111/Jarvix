@@ -4,7 +4,8 @@ from jarvix.domain import ToolResult
 
 BASE_TOOLS = frozenset({"capabilities.load", "notes.search", "notes.create", "tasks.list", "tasks.create",
     "memory.search", "memory.remember", "apps.list", "apps.open", "projects.list", "files.search",
-    "files.read_text", "system.status", "web.open", "web.search", "calculate.evaluate"})
+    "files.read_text", "system.status", "web.open", "web.search", "calculate.evaluate",
+    "operator.run", "operator.preview", "workspaces.list", "routines.list", "context.inspect"})
 
 
 def initial_tools(specs):

@@ -65,7 +65,7 @@ class PermissionDialog(QDialog):
         layout.addWidget(label(f"Tool · {request.tool_name}    Scope · {request.permission}", "Accent", True))
         preview = QPlainTextEdit()
         preview.setReadOnly(True)
-        preview.setPlainText(request.preview if disclose else json.dumps(request.arguments, indent=2, ensure_ascii=False))
+        preview.setPlainText(request.preview or json.dumps(request.arguments, indent=2, ensure_ascii=False))
         layout.addWidget(preview, 1)
         layout.addWidget(label("This approval applies to this request only. You can deny and continue the conversation.", "Muted", True))
         row = QHBoxLayout()
@@ -89,6 +89,7 @@ class ChatPage(Page):
         self.worker = None
         self.last_answer = ""
         self.pending_dialog = None
+        self.operator_items = {}
         split = QSplitter()
         history_widget = QWidget()
         history_layout = QVBoxLayout(history_widget)
@@ -260,7 +261,9 @@ class ChatPage(Page):
             self.window.notify("Stop the active response before switching conversations.")
             return
         self.conversation_id = conversation_id
+        self.window.select_context(conversation_id=conversation_id)
         self.timeline.clear()
+        self.operator_items.clear()
         self.timeline.hide()
         self.render_messages()
         self.refresh_history()
@@ -270,8 +273,10 @@ class ChatPage(Page):
             self.window.notify("Stop the active response before creating a conversation.")
             return
         self.conversation_id = None
+        self.window.select_context(conversation_id="")
         self.last_answer = ""
         self.timeline.clear()
+        self.operator_items.clear()
         self.timeline.hide()
         self.composer.clear()
         self.render_messages()
@@ -341,11 +346,13 @@ class ChatPage(Page):
             return
         if not self.conversation_id:
             self.conversation_id = self.services.new_conversation()
+            self.window.select_context(conversation_id=self.conversation_id)
             clear_layout(self.messages)
         self.composer.clear()
         self.add_message("user", text)
         self.activity.setText("Preparing request…")
         self.timeline.clear()
+        self.operator_items.clear()
         self.timeline.setVisible(False)
         self.send_button.setEnabled(False)
         self.stop.setEnabled(True)
@@ -365,17 +372,85 @@ class ChatPage(Page):
     def on_activity(self, kind, data):
         if self.window.closing:
             return
-        if kind in {"tool", "tool_result", "usage"}:
+        if kind in {"tool", "tool_result", "usage", "operator_session"}:
+            if kind == "operator_session":
+                self.show_operator_card(data)
+                return
             title = "Token usage" if kind == "usage" else data.get("name", "Tool") + " · " + data.get("status", "Result")
             item = QListWidgetItem(title)
             item.setData(Qt.ItemDataRole.UserRole, data)
             self.timeline.addItem(item)
+            if kind == "tool_result":
+                self.install_action_card(item, data)
             self.timeline.setVisible(True)
             self.timeline.scrollToBottom()
         names = {"provider": "Waiting for the AI provider…", "tool": "Running an approved tool…", "provider_request": "Waiting for the AI provider…", "tool_start": "Running an approved tool…", "tool_result": "Tool returned a structured result", "permission": "Waiting for your approval…", "complete": "Response complete"}
         description = names.get(kind, kind.replace("_", " ").capitalize())
         tool = data.get("tool") or data.get("tool_name") or data.get("name")
         self.activity.setText(description + (f" · {tool}" if tool else ""))
+
+    def install_action_card(self, item, data):
+        name = data.get("name", "Tool")
+        result = data.get("result", data)
+        value = result.get("data") or {}
+        value = value if isinstance(value, dict) else {}
+        title = {"files.move": "FILE MOVED", "files.rename": "FILE RENAMED", "files.copy": "FILE COPIED",
+                 "apps.open": "APP OPENED", "workflows.save": "AUTOMATION SAVED", "workspaces.launch": "WORKSPACE OPENED",
+                 "tasks.create": "TASK CREATED", "notes.create": "NOTE CREATED"}.get(name, name.replace(".", " · ").upper())
+        card = QWidget()
+        layout = QHBoxLayout(card)
+        layout.setContentsMargins(8, 4, 8, 4)
+        summary = QVBoxLayout()
+        summary.setSpacing(3)
+        summary.addWidget(label(title if result.get("ok", True) else name + " · FAILED", "Eyebrow"))
+        detail = value.get("path") or value.get("name") or result.get("error")
+        if detail:
+            summary.addWidget(label(str(detail)[:220], "Muted", True))
+        layout.addLayout(summary, 1)
+        layout.addStretch()
+        layout.addWidget(button("View", lambda: self.inspect_event(item), "Quiet"))
+        if result.get("ok", True) and value.get("undo_id"):
+            layout.addWidget(button("Undo", lambda: self.window.open_capabilities(
+                "actions.undo", {"id": value["undo_id"]}), "Quiet"))
+        elif result.get("ok", True) and value.get("undo_available") and value.get("operation_id"):
+            layout.addWidget(button("Undo", lambda: self.window.open_capabilities(
+                "files.undo", {"operation_id": value["operation_id"]}), "Quiet"))
+        if result.get("ok", True) and name in {"files.move", "files.rename", "files.copy"} and value.get("path"):
+            layout.addWidget(button("Reveal", lambda: self.window.open_capabilities(
+                "files.reveal", {"path": value["path"]}), "Quiet"))
+        if name in {"operator.run", "operator.retry"} and value.get("id"):
+            layout.addWidget(button("Session", lambda: self.window.open_operator(value["id"]), "Quiet"))
+        elif name == "notes.create" and value.get("id"):
+            layout.addWidget(button("Open", lambda: self.window.open_note(value["id"]), "Quiet"))
+        elif name == "tasks.create" and value.get("id"):
+            layout.addWidget(button("Open", lambda: self.window.open_task(value["id"]), "Quiet"))
+        item.setSizeHint(card.sizeHint())
+        self.timeline.setItemWidget(item, card)
+
+    def show_operator_card(self, session):
+        session_id = session.get("id")
+        if not session_id:
+            return
+        item = self.operator_items.get(session_id)
+        if item is None:
+            item = QListWidgetItem()
+            self.operator_items[session_id] = item
+            self.timeline.addItem(item)
+        steps = session.get("steps", [])
+        done = sum(step.get("status") in {"complete", "completed"} for step in steps)
+        state = session.get("status", "planning").replace("_", " ")
+        item.setData(Qt.ItemDataRole.UserRole, session)
+        item.setText(f"OPERATOR TASK · {done}/{len(steps)} steps · {state}")
+        card = QWidget()
+        row = QHBoxLayout(card)
+        row.setContentsMargins(8, 4, 8, 4)
+        row.addWidget(label(f"OPERATOR · {done}/{len(steps)} · {state}", "Accent"))
+        row.addStretch()
+        row.addWidget(button("View session", lambda: self.window.open_operator(session_id), "Quiet"))
+        item.setSizeHint(card.sizeHint())
+        self.timeline.setItemWidget(item, card)
+        self.timeline.show()
+        self.activity.setText("Operator · " + state)
 
     def inspect_event(self, item):
         TextPreview("Action details", "Local result; sharing with the provider requires separate approval.",

@@ -6,7 +6,7 @@ from difflib import SequenceMatcher
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer, QByteArray
+from PySide6.QtCore import Qt, QTimer, QByteArray, QObject, Signal
 from PySide6.QtGui import QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QFrame, QStackedWidget,
@@ -22,6 +22,8 @@ from .pages import (
 )
 from .chat import ChatPage
 from .capabilities import CapabilityDialog
+from .operator import DesktopIndicator, OperatorDialog, ServiceJob
+from .overlay import CommandOverlay, GlobalHotkey, WorkflowHotkeys
 
 
 NAVIGATION = [
@@ -30,6 +32,10 @@ NAVIGATION = [
     ("Automations", "↻"), ("Integrations", "◇"), ("System", "⌁"),
     ("Activity", "⋮"), ("Settings", "⚙"),
 ]
+
+
+class RuntimeSignals(QObject):
+    event = Signal(str, object)
 
 
 class CommandPalette(QDialog):
@@ -70,6 +76,10 @@ class CommandPalette(QDialog):
             ("Provider and model settings", "Settings", lambda: window.navigate("Settings")),
             ("Tool permissions and capabilities", "Settings", lambda: window.navigate("Settings")),
             ("Local actions", "Command", window.open_capabilities),
+            ("Operator sessions", "Command", window.open_operator),
+            ("Quick command overlay", "Command", window.open_overlay),
+            ("Build a workflow", "Automation", window.open_workflow_builder),
+            ("Manage workspaces", "Command", window.open_workspaces),
             ("Notifications inbox", "Command", window.open_notifications),
             ("Update file index", "Command", lambda: (window.navigate("Files"), window.pages["Files"].scan())),
         ])
@@ -87,6 +97,10 @@ class CommandPalette(QDialog):
             entries.append((routine["name"], "Automation", lambda record=routine: window.open_capabilities("automations.preview", {"id": record["id"]})))
         for workspace in services.records.list("workspace"):
             entries.append((workspace["name"], "Workspace", lambda record=workspace: window.open_capabilities("workspaces.launch", {"id": record["id"]})))
+        if hasattr(services, "workflows"):
+            for workflow in services.workflows.list():
+                entries.append((workflow["name"], "Routine" if workflow.get("kind") == "routine" else "Workflow",
+                                lambda record=workflow: window.open_capabilities("workflows.run", {"id": record["id"]})))
         tool_names = {spec.name for spec in services.registry.specs()}
         for name in services.settings.get("commands.favorites", []):
             if name in tool_names:
@@ -151,6 +165,10 @@ class MainWindow(QMainWindow):
         self.routines_busy = False
         self.reminder_dialogs = []
         self.capability_dialog = None
+        self.operator_dialog = None
+        self.workflow_dialogs = []
+        self.workspace_dialog = None
+        self.hotkey_jobs = {}
         self.tray = None
         self._exit_requested = False
         self.navigation_history = []
@@ -197,7 +215,7 @@ class MainWindow(QMainWindow):
         side.addSpacing(10)
         side.addWidget(label("●  LOCAL-FIRST", "Success"))
         side.addWidget(label("Your data. Your decisions.", "Muted"))
-        side.addWidget(label("OPERATOR  /  0.2", "Eyebrow"))
+        side.addWidget(label("OPERATOR  /  0.3", "Eyebrow"))
         main.addWidget(sidebar)
         workspace = QWidget()
         workspace_layout = QVBoxLayout(workspace)
@@ -221,6 +239,7 @@ class MainWindow(QMainWindow):
         top.addWidget(self.clock_label)
         top.addSpacing(19)
         top.addWidget(button("Actions", self.open_capabilities))
+        top.addWidget(button("Operator", self.open_operator))
         top.addWidget(button("Inbox", self.open_notifications, "Quiet"))
         top.addWidget(button("Search anything    Ctrl K", self.open_palette))
         workspace_layout.addWidget(topbar)
@@ -263,7 +282,25 @@ class MainWindow(QMainWindow):
         self.system_timer.start(15000)
         self.routine_timer = QTimer(self)
         self.routine_timer.timeout.connect(self.run_routines)
-        self.routine_timer.start(30000)
+        if not hasattr(self.services, "background"):
+            self.routine_timer.start(30000)
+        self.desktop_indicator = DesktopIndicator(self)
+        if hasattr(self.services, "desktop"):
+            self.services.desktop.set_indicator(self.desktop_indicator)
+        self.overlay = CommandOverlay(self)
+        self.global_hotkey = GlobalHotkey(self.open_overlay)
+        self.workflow_hotkeys = WorkflowHotkeys(self.run_workflow_hotkey)
+        self.shutdown_timer = QTimer(self)
+        self.shutdown_timer.setInterval(100)
+        self.shutdown_timer.timeout.connect(self.close)
+        self.hotkey_timer = QTimer(self)
+        self.hotkey_timer.setInterval(2000)
+        self.hotkey_timer.timeout.connect(self.configure_workflow_hotkeys)
+        self.hotkey_timer.start()
+        self.runtime_signals = RuntimeSignals(self)
+        self.runtime_signals.event.connect(self.runtime_event)
+        if hasattr(self.services, "operator"):
+            self.services.operator.set_callback(self.runtime_signals.event.emit)
         self.update_clock()
         self.update_status()
         geometry = self.services.settings.get("ui.geometry", "")
@@ -272,8 +309,14 @@ class MainWindow(QMainWindow):
         last_page = self.services.settings.get("ui.last_page", "Home")
         self.navigate(last_page if last_page in self.pages else "Home")
         self.setup_tray()
+        self.configure_overlay()
+        self.configure_workflow_hotkeys()
+        if hasattr(self.services, "background"):
+            self.services.background.set_callback(self.runtime_signals.event.emit)
+            self.services.background.start()
         QTimer.singleShot(100, self.refresh_system)
-        QTimer.singleShot(700, self.run_routines)
+        if not hasattr(self.services, "background"):
+            QTimer.singleShot(700, self.run_routines)
 
     def update_clock(self):
         self.clock_label.setText(datetime.now().strftime("%a, %b %d   %I:%M %p"))
@@ -328,6 +371,10 @@ class MainWindow(QMainWindow):
         if send:
             chat.send()
 
+    def select_context(self, **selection):
+        if hasattr(self.services, "context") and self.services.settings.get("context.enabled", False):
+            self.guard(lambda: self.services.context.set_current(**selection))
+
     def open_conversation(self, conversation_id):
         self.navigate("Chat")
         self.pages["Chat"].load_conversation(conversation_id)
@@ -366,6 +413,90 @@ class MainWindow(QMainWindow):
         if self.capability_dialog and self.capability_dialog.selected_tool == "notifications.list":
             self.capability_dialog.run_action()
 
+    def open_operator(self, session_id=None):
+        if self.closing:
+            return
+        if self.operator_dialog is None:
+            self.operator_dialog = OperatorDialog(self)
+        if session_id:
+            self.operator_dialog.open_session(session_id)
+        self.operator_dialog.show()
+        self.operator_dialog.raise_()
+        self.operator_dialog.activateWindow()
+
+    def open_workflow_builder(self, definition=None):
+        from .workflows import WorkflowBuilder
+        dialog = WorkflowBuilder(self, definition)
+        self.workflow_dialogs.append(dialog)
+        dialog.finished.connect(lambda _result: self.workflow_dialogs.remove(dialog)
+                                if dialog in self.workflow_dialogs else None)
+        dialog.show()
+
+    def open_overlay(self):
+        if not self.closing:
+            self.overlay.toggle()
+
+    def open_workspaces(self):
+        from .workspaces import WorkspaceDialog
+        if self.workspace_dialog is None:
+            self.workspace_dialog = WorkspaceDialog(self)
+        self.workspace_dialog.refresh()
+        self.workspace_dialog.show()
+        self.workspace_dialog.raise_()
+        self.workspace_dialog.activateWindow()
+
+    def configure_overlay(self):
+        message = self.global_hotkey.configure(self.services.settings.get("overlay.enabled", False),
+                                               self.services.settings.get("overlay.hotkey", "Ctrl+Alt+Space"))
+        if self.services.settings.get("overlay.enabled", False):
+            self.notify(message)
+
+    def configure_workflow_hotkeys(self):
+        if self.closing or not hasattr(self.services, "workflows"):
+            return
+        errors = self.workflow_hotkeys.configure(self.services.workflows.list(),
+                                                 self.services.settings.get("automations.enabled", True))
+        if errors:
+            self.notify("Workflow hotkeys · " + " · ".join(errors))
+
+    def run_workflow_hotkey(self, shortcut):
+        if self.closing or shortcut in self.hotkey_jobs:
+            return
+        worker = ServiceJob(lambda cancel, on_event, **_: self.services.workflows.trigger_hotkey(
+            shortcut, cancel=cancel, on_event=on_event), self)
+        self.hotkey_jobs[shortcut] = worker
+        self.jobs.add(worker)
+        worker.activity.connect(self.runtime_event)
+        worker.failed.connect(self.notify)
+        def completed(results):
+            failed = sum(not row.get("ok", False) for row in results)
+            self.notify(f"Workflow shortcut · {failed} run(s) need attention" if failed else
+                        f"Workflow shortcut · {len(results)} run(s) completed")
+        worker.succeeded.connect(completed)
+
+        def finished():
+            self.hotkey_jobs.pop(shortcut, None)
+            self.release_job(worker)
+        worker.finished.connect(finished)
+        worker.start()
+
+    def runtime_event(self, kind, data):
+        if self.closing:
+            return
+        if kind == "operator_session":
+            if self.operator_dialog:
+                self.operator_dialog.refresh()
+        elif kind == "notification":
+            if self.tray:
+                self.tray.showMessage(data.get("title", "Jarvix"), data.get("body", ""),
+                                      QSystemTrayIcon.MessageIcon.Information, 8000)
+            else:
+                self.notify(data.get("title", "Jarvix notification"))
+        elif kind == "error" or (kind == "background" and data.get("status") == "error"):
+            self.notify(data.get("error", "Background task needs attention."))
+        if self.current_page in {"Home", "Automations", "Activity", "Tasks"}:
+            self.pages[self.current_page].refresh()
+
     def setup_tray(self):
         if QApplication.platformName() == "offscreen" or not QSystemTrayIcon.isSystemTrayAvailable():
             return
@@ -374,6 +505,8 @@ class MainWindow(QMainWindow):
         menu = QMenu(self)
         menu.addAction("Open Jarvix", self.restore_window)
         menu.addAction("Local actions", lambda: (self.restore_window(), self.open_capabilities()))
+        menu.addAction("Operator sessions", lambda: (self.restore_window(), self.open_operator()))
+        menu.addAction("Quick command", self.open_overlay)
         menu.addAction("Tasks", lambda: (self.restore_window(), self.navigate("Tasks")))
         menu.addAction("Notifications", lambda: (self.restore_window(), self.open_notifications()))
         menu.addAction("Stop speaking", self.services.stop_speaking)
@@ -506,6 +639,22 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         self.closing = True
+        self.global_hotkey.close()
+        self.workflow_hotkeys.close()
+        self.hotkey_timer.stop()
+        for worker in self.hotkey_jobs.values():
+            worker.cancel.set()
+        self.overlay.hide()
+        self.desktop_indicator.hud.hide()
+        if hasattr(self.services, "desktop"):
+            self.services.desktop.cancel()
+        if hasattr(self.services, "background"):
+            self.services.background.stop(timeout=0)
+        if self.operator_dialog:
+            self.operator_dialog.shutdown()
+        for dialog in list(self.workflow_dialogs):
+            dialog.cancel()
+            dialog.hide()
         if self.capability_dialog:
             self.capability_dialog.cancel()
             self.capability_dialog.hide()
@@ -514,10 +663,14 @@ class MainWindow(QMainWindow):
         self.pages["Chat"].cancel()
         self.pages["Voice"].input_panel.shutdown()
         self.guard(self.services.stop_speaking)
-        if self.jobs or self.pages["Chat"].busy:
+        background_running = hasattr(self.services, "background") and self.services.background.running
+        if self.jobs or self.pages["Chat"].busy or background_running:
             self.notify("Finishing active local work before closing…")
+            if not self.shutdown_timer.isActive():
+                self.shutdown_timer.start()
             event.ignore()
             return
+        self.shutdown_timer.stop()
         if self.tray:
             self.tray.hide()
         event.accept()

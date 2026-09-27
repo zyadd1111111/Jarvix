@@ -58,11 +58,15 @@ class Services:
         self._roots_lock = threading.RLock()
         from jarvix.capabilities import files, developer, computer, productivity, browser, workspaces
         from jarvix.capabilities import notifications, automations, chat_management, integration, catalog
+        from jarvix.capabilities import desktop, workflows, operator, undo, context
         from jarvix.speech_input import SpeechInputService
         for module in (files, developer, computer, productivity, browser, workspaces,
-                       notifications, automations, chat_management, integration, catalog):
+                       notifications, automations, chat_management, integration, desktop, workflows,
+                       undo, operator, context, catalog):
             module.setup(self, self.registry)
         self.microphone = SpeechInputService(self)
+        from jarvix.background import BackgroundRuntime
+        self.background = BackgroundRuntime(self)
 
     def execute_tool(self, name, arguments, approve=None, cancel=None, on_event=None):
         """Single host enforcement boundary for UI, workspaces and automation actions."""
@@ -72,15 +76,23 @@ class Services:
             return invalid
         spec = self.registry.get(name)
         try:
-            with operation(cancel, approve, timeout=self.settings.get("agent.timeout_seconds", 120)) as context:
+            with operation(cancel, approve, timeout=self.settings.get("agent.timeout_seconds", 120), on_event=on_event) as context:
                 consume_step()
+                from jarvix.capabilities.workflows import background_allowed
                 if context.unattended and name not in self.UNATTENDED_TOOL_ALLOWLIST:
-                    self.repository.audit("permission", f"{name}: unavailable to unattended routine")
-                    return ToolResult(False,
-                                      error="Unattended routines are limited to safe local summaries and notifications.",
-                                      sensitivity="public")
+                    if not background_allowed(name, arguments):
+                        self.repository.audit("permission", f"{name}: unavailable to unattended routine")
+                        return ToolResult(False,
+                                          error="Unattended routines require an exact approved safe workflow action.",
+                                          sensitivity="public")
                 preview_arguments = arguments
                 app_preview = None
+                workflow_snapshot = None
+                if name in {"workflows.toggle", "workflows.run", "routines.run"}:
+                    workflow_snapshot = self.records.get("workflow", arguments["id"])["approval_fingerprint"]
+                    preview_arguments = {**arguments, "workflow": self.workflows.preview(arguments["id"])}
+                    spec = replace(spec, permission_level=3, description=
+                        "Review this exact workflow and its background approvals. Every action still checks permissions.")
                 if name == "apps.open":
                     configured = self.apps.arguments_for(arguments["id"])
                     if configured:
@@ -94,21 +106,35 @@ class Services:
                 approval = approve if approve is not None else context.approve
                 if not self.permissions.authorize(spec, preview_arguments, approval):
                     return ToolResult(False, error="Permission denied or the required access switch is off.", sensitivity="public")
+                if workflow_snapshot and self.records.get("workflow", arguments["id"])["approval_fingerprint"] != workflow_snapshot:
+                    return ToolResult(False, error="Workflow changed during approval. Preview it again.", sensitivity="public")
                 check_cancelled()
+                on_event = on_event or context.on_event
                 if on_event:
                     on_event("tool", {"name": name, "status": "Running"})
+                reversible = self.undo.prepare(name, arguments) if hasattr(self, "undo") else None
                 previous_app = context.approved_app
                 context.approved_app = app_preview
                 try:
                     result = self.registry.execute(name, arguments)
                 finally:
                     context.approved_app = previous_app
+                if result.ok and hasattr(self, "undo"):
+                    try:
+                        undo_id = self.undo.record(name, arguments, result, reversible)
+                        if undo_id and isinstance(result.data, dict):
+                            result.data["undo_id"] = undo_id
+                    except Exception:
+                        # A receipt failure cannot make an already completed action appear unexecuted.
+                        self.repository.audit("undo", "Action completed; no undo receipt could be recorded")
                 self.repository.audit("tool", f"{name}: {'completed' if result.ok else 'failed'}")
                 self.records.put("action_history", {"tool": name, "ok": result.ok,
                                                    "permission_level": spec.permission_level})
                 return result
         except InterruptedError:
             return ToolResult(False, error="Operation stopped or timed out.")
+        except (ValueError, FileNotFoundError, PermissionError):
+            return ToolResult(False, error="The requested target changed, is unavailable, or is outside allowed access.")
 
     def list_notes(self):
         return self.repository.list("notes")
@@ -490,6 +516,13 @@ class Services:
             self._automation_lock.release()
 
     def close(self):
+        if hasattr(self, "background"):
+            if not self.background.stop():
+                raise RuntimeError("Background work is still stopping. Wait for shutdown before releasing services.")
+        if hasattr(self, "operator"):
+            self.operator.close()
+        if hasattr(self, "desktop"):
+            self.desktop.cancel()
         self.voice.close()
         if hasattr(self, "integrations"):
             self.integrations.close()

@@ -201,13 +201,20 @@ class Win32:
             previous = dpi(ct.c_void_p(-4))
         try:
             if target == "window":
+                from jarvix.capabilities.windows_capture import capture_window
+
                 item = self.window(handle)
                 if item["process_id"] != process_id or item["minimized"]:
                     raise ValueError("The selected window is unavailable or minimized.")
                 rect = wt.RECT()
                 self._checked(self.user.GetWindowRect(handle, ct.byref(rect)), "Window bounds unavailable.")
                 box = (rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top)
+                data = capture_window(handle, process_id, *box)
+                return data, {"x": box[0], "y": box[1], "width": box[2], "height": box[3],
+                              "capture_method": "PrintWindow", "isolated_window": True}
             else:
+                if target not in {"monitor", "all"}:
+                    raise ValueError("Choose a window, monitor, or all displays.")
                 monitors = self.monitors()
                 if target == "all":
                     if not monitors:
