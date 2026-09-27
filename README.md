@@ -22,7 +22,7 @@ Jarvix is a local-first desktop AI assistant built with Python, PySide6 and SQLi
 
 For this local version, build or extract `dist\Jarvix-0.3.0-windows-x64.zip`, then run `Jarvix\Jarvix.exe`. You can also run `dist\Jarvix\Jarvix.exe` directly. Keep the extracted folder together, including `_internal`. This is an unsigned portable build.
 
-Published versions remain available on [GitHub Releases](https://github.com/zyadd1111111/Jarvix/releases); the local 0.3 checkpoint has not been published there.
+Jarvix 0.3 source is published on the `main` branch. Packaged downloads are available from [GitHub Releases](https://github.com/zyadd1111111/Jarvix/releases) when attached to a release; until then, build the portable package with `scripts\build.ps1` or install from source below.
 
 ## Install from source
 
