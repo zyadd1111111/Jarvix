@@ -12,7 +12,11 @@ def main() -> int:
     parser.add_argument("--data-dir", type=Path, help="Use a separate local profile")
     parser.add_argument("--screenshot", type=Path, help="Render an offscreen screenshot, then exit")
     parser.add_argument("--page", help="Override the saved workspace section")
+    parser.add_argument("--scheduled-run", help="Execute one previously approved Windows schedule")
     args = parser.parse_args()
+    if args.scheduled_run:
+        from jarvix.scheduled_runner import run_scheduled
+        return run_scheduled(args.data_dir, args.scheduled_run)
     if args.screenshot:
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from PySide6.QtCore import QLockFile, QTimer
@@ -25,13 +29,15 @@ def main() -> int:
     app.setApplicationName("Jarvix")
     app.setOrganizationName("Jarvix")
     app.setFont(QFont("Segoe UI", 10))
-    services = Services(args.data_dir)
-    lock = QLockFile(str(services.data_dir / "jarvix.lock"))
+    from platformdirs import user_data_path
+    data_dir = Path(args.data_dir or os.environ.get("JARVIX_DATA_DIR") or user_data_path("Jarvix", appauthor=False))
+    data_dir.mkdir(parents=True, exist_ok=True)
+    lock = QLockFile(str(data_dir / "jarvix.lock"))
     lock.setStaleLockTime(0)
     if not lock.tryLock(0):
         QMessageBox.information(None, "Jarvix is running", "This Jarvix profile is already open. Use --data-dir for another profile.")
-        services.close()
         return 1
+    services = Services(data_dir)
     window = MainWindow(services)
     if args.screenshot:
         window.resize(1440, 940)
@@ -56,3 +62,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

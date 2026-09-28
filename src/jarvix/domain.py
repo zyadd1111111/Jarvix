@@ -22,6 +22,24 @@ class Message:
     tool_call_id: str | None = None
     name: str | None = None
     metadata: Json = field(default_factory=dict)
+    images: list[ImageAttachment] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class ImageAttachment:
+    """A sanitized, explicitly approved image for one provider request only."""
+
+    name: str
+    mime_type: str
+    data_base64: str = field(repr=False)
+    sha256: str = ""
+    width: int = 0
+    height: int = 0
+
+    def description(self) -> Json:
+        return {"name": self.name, "mime_type": self.mime_type, "sha256": self.sha256,
+                "width": self.width, "height": self.height,
+                "encoded_bytes": len(self.data_base64)}
 
 
 @dataclass(frozen=True)
@@ -50,6 +68,11 @@ class AIProvider(Protocol):
     def complete(self, messages: list[Message], tools: list[ToolSpec], model: str) -> Completion: ...
 
 
+class StreamingProvider(AIProvider, Protocol):
+    def stream(self, messages: list[Message], tools: list[ToolSpec], model: str,
+               on_delta: Callable[[str], None]) -> Completion: ...
+
+
 @dataclass
 class ToolResult:
     ok: bool
@@ -69,7 +92,9 @@ class PermissionRequest:
     description: str
     arguments: Json
     preview: str = ""
+    images: tuple[ImageAttachment, ...] = field(default=(), repr=False)
 
 
 Approval = Callable[[PermissionRequest], bool]
 EventSink = Callable[[str, Json], None]
+

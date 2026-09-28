@@ -61,6 +61,11 @@ class VoiceInputPanel(QWidget):
         self.transcript.setMinimumHeight(85)
         layout.addWidget(self.transcript)
         layout.addWidget(button("Review in Chat  ↗", self.review, "Primary"))
+        self.wake_panel = None
+        if hasattr(self.services, "wake_word"):
+            from .wake_input import WakeWordPanel
+            self.wake_panel = WakeWordPanel(self)
+            layout.addWidget(self.wake_panel)
         self.timer = QTimer(self)
         self.timer.setInterval(250)
         self.timer.timeout.connect(self.refresh)
@@ -181,4 +186,7 @@ class VoiceInputPanel(QWidget):
         """Stop acquisition before the main window waits for pending workers."""
         self._shutdown = True
         self.timer.stop()
+        if self.wake_panel:
+            self.wake_panel.shutdown()
         self.cancel()
+

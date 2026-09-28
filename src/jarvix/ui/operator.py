@@ -419,3 +419,4 @@ class DesktopIndicator(QObject):
                                  (self.hud.isVisible() and QApplication.platformName() not in {"offscreen", "minimal"}))
         finally:
             bridge["ready"].set()
+

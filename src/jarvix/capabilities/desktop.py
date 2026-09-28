@@ -355,3 +355,4 @@ def setup(services, registry):
          vision.read_text, {"screenshot_id": ID}, ("screenshot_id",), permission="screen.capture")
     tool("vision.history", "List explicit screen captures from local history.", vision.history,
          {"limit": integer(1, 100)}, permission="screen.capture")
+

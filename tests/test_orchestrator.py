@@ -149,3 +149,4 @@ def test_context_is_bounded_and_system_instructions_retained():
     messages = bounded_history([{"role": "user", "content": "x" * 1000} for _ in range(100)])
     assert messages[0].role == "system"
     assert len(messages) <= 29
+

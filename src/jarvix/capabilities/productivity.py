@@ -368,3 +368,4 @@ def setup(s, registry):
     add("projects.update", "Rename, archive/unarchive or link a workspace to a project.",
         {"id": ID, "name": string(200), "archived": BOOL, "workspace_id": string(160, 0)}, ["id"], projects.update, 2)
     add("projects.summary", "Retrieve a project's linked notes, tasks, indexed files and workspace metadata.", {"id": ID}, ["id"], projects.summary)
+

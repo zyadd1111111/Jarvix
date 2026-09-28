@@ -414,3 +414,4 @@ class Win32:
             release(enum)
             if status >= 0:
                 self._bind(ole, "CoUninitialize", None, [])()
+

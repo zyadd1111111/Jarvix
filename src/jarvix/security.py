@@ -70,7 +70,7 @@ class PermissionService:
     def authorize(self, spec: ToolSpec, arguments: dict, approve: Approval) -> bool:
         settings = SettingsRepository(self.db)
         gates = {"clipboard": "clipboard.enabled", "screen": "screenshots.enabled",
-                 "microphone": "microphone.enabled"}
+                 "microphone": "microphone.enabled", "browser_control": "browser.control_enabled"}
         prefix = spec.permission.split(".")[0]
         if prefix in gates and not settings.get(gates[prefix], False):
             self.repository.audit("permission", f"{spec.name}: access switch is off")
@@ -99,3 +99,4 @@ class PermissionService:
                             "Send this exact tool result to the selected AI provider for this response.", arguments, preview)))
         self.repository.audit("privacy", f"{spec.name}: cloud disclosure {'allowed' if allowed else 'denied'}")
         return allowed
+

@@ -82,3 +82,4 @@ QMenu { background: #152032; border: 1px solid #34435d; padding: 5px; }
 QMenu::item { padding: 7px 20px; }
 QMenu::item:selected { background: #293f65; }
 """
+

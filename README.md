@@ -1,8 +1,21 @@
 # Jarvix
 
-Jarvix is a local-first desktop AI assistant built with Python, PySide6 and SQLite. Version 0.3.0, **Operator**, connects the existing tools through visible plans, Windows accessibility control and local workflows.
+Jarvix is a local-first desktop AI assistant built with Python, PySide6 and SQLite. Version 0.4.0, **Nexus**, extends Operator with deeper browser control, real account integrations, streaming responses, multimodal chat, wake-word voice, closed-app scheduling and recycle restoration.
 
-## What's new in 0.3.0
+## What's new in 0.4.0
+
+- **Deep browser control**: Native messaging bridge with Chrome/Edge for tab management, page inspection, element targeting, form interaction, session save/restore and duplicate cleanup. Accessibility-first automation without screen coordinates.
+- **Real integrations**: OAuth flows and account connection for Gmail, Google Calendar, Google Drive, GitHub, Spotify and Discord. Credentials in OS vault, scoped permissions, connection status tracking and "Not connected" replaced with working adapters.
+- **Streaming responses**: Token-level streaming from OpenAI and Gemini with incremental UI rendering, clean cancellation and proper state persistence. No blocking or duplicate messages.
+- **Multimodal chat**: Image and screenshot attachments for vision-capable models. Drag-drop images, paste from clipboard, capture active window or selected monitor. Local disclosure approval before provider submission.
+- **Wake-word voice**: Optional local keyword spotting with sherpa-onnx. "Jarvix" activates hands-free mode with visible microphone indicator, sensitivity control and instant pause. Audio stays local; no cloud streaming.
+- **Closed-app scheduling**: Windows Task Scheduler integration for approved workflows. Weekday/time schedules run even when Jarvix is closed. Signed task definitions, least privilege, interactive-user context and explicit per-workflow approval.
+- **Recycle restoration**: Track Jarvix-recycled items with Shell receipts. List recent deletions, preview restore targets, check conflicts and restore with fingerprint verification. Activity log and original-path tracking.
+- **Operator 2.0**: Improved session management with dependency-aware steps, structured retry policies, checkpoints, resumable sessions and partial-completion handling. Better failure reasons and recovery suggestions.
+- **Context Engine 2.0**: Richer context snapshots with active app, browser tab, selected files, workspace, project and clipboard type. Explicit opt-in permission model with inspectable captured state.
+- **Integration Center**: Proper Integrations UI with connection cards showing status, connected account, permissions, last activity and manage actions. Real OAuth state, no fake connection claims.
+
+## What was in 0.3.0
 
 - Windows UI Automation: inspect controls, target known elements, type, invoke, navigate, wait for controls and verify state. A visible control indicator provides pause and cancel.
 - Operator plans with action previews, result references, verification, bounded read retries, cancellation and persistent session timelines. Uncertain mutations require inspection and a new plan before replay.
@@ -20,9 +33,9 @@ Jarvix is a local-first desktop AI assistant built with Python, PySide6 and SQLi
 
 ## Install on Windows
 
-For this local version, build or extract `dist\Jarvix-0.3.0-windows-x64.zip`, then run `Jarvix\Jarvix.exe`. You can also run `dist\Jarvix\Jarvix.exe` directly. Keep the extracted folder together, including `_internal`. This is an unsigned portable build.
+For this local version, build or extract `dist\Jarvix-0.4.0-windows-x64.zip`, then run `Jarvix\Jarvix.exe`. You can also run `dist\Jarvix\Jarvix.exe` directly. Keep the extracted folder together, including `_internal`. This is an unsigned portable build.
 
-Jarvix 0.3 source is published on the `main` branch. Packaged downloads are available from [GitHub Releases](https://github.com/zyadd1111111/Jarvix/releases) when attached to a release; until then, build the portable package with `scripts\build.ps1` or install from source below.
+Jarvix 0.4 source is published on the `main` branch. Packaged downloads are available from [GitHub Releases](https://github.com/zyadd1111111/Jarvix/releases) when attached to a release; until then, build the portable package with `scripts\build.ps1` or install from source below.
 
 ## Install from source
 
@@ -85,4 +98,5 @@ Tests use isolated profiles, mocked provider HTTP and mocked destructive OS acti
 
 Run `.\.venv\Scripts\python.exe scripts\verify_operator_native.py` for an opt-in Windows UIA/capture/OCR smoke test that creates and controls only its own test windows. Local OCR needs an installed Windows recognition language; accessibility/capture support varies by application.
 
-Wake words, cloud image attachments, token streaming, deep browser control, account actions, recycle restoration and scheduling while closed remain unimplemented. Native operator control requires Windows. The Windows-start trigger means the first Jarvix run after boot; it does not install a startup task. PDF support is metadata inspection. Stop prevents subsequent work, but an active HTTP read may wait for its timeout. Completed side effects are not automatically rolled back. See [SECURITY.md](SECURITY.md) and [the operator checkpoint](docs/OPERATOR-CHECKPOINT.md).
+Native operator control requires Windows. The Windows-start trigger means the first Jarvix run after boot; it does not install a startup task. PDF support is metadata inspection. Stop prevents subsequent work, but an active HTTP read may wait for its timeout. Completed side effects are not automatically rolled back. Wake-word support requires the optional `sherpa-onnx` package and a local keyword-spotting model. See [SECURITY.md](SECURITY.md) and [the operator checkpoint](docs/OPERATOR-CHECKPOINT.md).
+

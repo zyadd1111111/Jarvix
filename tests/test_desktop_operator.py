@@ -229,3 +229,4 @@ def test_paused_wait_still_obeys_its_deadline(operator, monkeypatch):
     assert result["timed_out"] and not result["matched"]
     assert not operator.status()["active"] and not operator.status()["paused"]
     assert operator._wait_deadline is None
+

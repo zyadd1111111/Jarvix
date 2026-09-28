@@ -15,3 +15,4 @@ Extend the existing application; preserve profiles and the thirteen-page shell.
 Completion evidence: implemented capability inventory, meaningful tests, actual Windows
 read-only checks, and a rebuilt executable. External account adapters remain visibly
 not connected until real credentials and provider implementations exist.
+

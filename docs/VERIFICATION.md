@@ -27,3 +27,4 @@ unverified. Native control depends on each application's accessibility support; 
 needs an installed Windows language. Scheduling requires Jarvix to remain running.
 Other deliberate limits are in README and OPERATOR-CHECKPOINT; permissions and data
 boundaries are in SECURITY.md. No unrelated user windows were captured by native tests.
+

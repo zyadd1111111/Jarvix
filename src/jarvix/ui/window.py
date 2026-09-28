@@ -215,7 +215,7 @@ class MainWindow(QMainWindow):
         side.addSpacing(10)
         side.addWidget(label("●  LOCAL-FIRST", "Success"))
         side.addWidget(label("Your data. Your decisions.", "Muted"))
-        side.addWidget(label("OPERATOR  /  0.3", "Eyebrow"))
+        side.addWidget(label("OPERATOR  /  0.4", "Eyebrow"))
         main.addWidget(sidebar)
         workspace = QWidget()
         workspace_layout = QVBoxLayout(workspace)
@@ -674,3 +674,4 @@ class MainWindow(QMainWindow):
         if self.tray:
             self.tray.hide()
         event.accept()
+

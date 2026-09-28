@@ -707,3 +707,4 @@ def setup(s, registry):
              {key: props[key] for key in ("name", "steps", "id", "conditions")}, ("name", "steps"), save_routine, 3)
     register(registry, "routines.run", "Run a saved manual routine with normal per-action permissions.",
              {"id": ID}, ("id",), run, 2)
+

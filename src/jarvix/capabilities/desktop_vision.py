@@ -177,3 +177,4 @@ class DesktopVisionService:
                 "language": result.get("language", ""), "bounded": bool(result.get("bounded")),
                 "source": "Windows OCR", "ocr_performed": True, "external_upload": False,
                 "note": "OCR may be inaccurate. It does not verify application state."}
+

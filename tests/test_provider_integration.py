@@ -245,3 +245,4 @@ def test_multiple_calls_keep_independent_approvals_and_result_correlation(monkey
     else:
         results = [message for message in endpoint.payloads[1]["messages"] if message["role"] == "tool"]
         assert [result["tool_call_id"] for result in results] == ["call-0", "call-1"]
+

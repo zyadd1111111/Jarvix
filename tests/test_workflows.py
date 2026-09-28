@@ -391,3 +391,4 @@ def test_file_watch_protects_sensitive_entries_and_reports_removed_root(services
     history = services.workflows.history(saved)
     assert history[0]["status"] == "failed"
     assert "private-value" not in json.dumps(history)
+

@@ -89,3 +89,4 @@ class ToolRegistry:
             # Never expose exception text: it can contain credentials, local paths,
             # database contents, subprocess output or provider response bodies.
             return ToolResult(False, error="The tool could not complete this request.")
+

@@ -520,11 +520,13 @@ class FileService:
         """Use the Windows shell recycle facility; never fall back to permanent delete."""
         from jarvix.capabilities.native_windows import Win32
         target = self.path(path, mutate=True)
-        self._fingerprint(target)
+        digest = self._fingerprint(target)
+        before = self.services.recycle.before(target) if hasattr(self.services, "recycle") else None
         check_cancelled()
         Win32().recycle(str(target))
         self.services.repository.audit("file_action", "Item sent to Windows Recycle Bin")
-        return {"recycled": True, "restore": "Restore this item using Windows Recycle Bin."}
+        receipt = self.services.recycle.record(target, digest, before) if hasattr(self.services, "recycle") else {}
+        return {"recycled": not target.exists(), **receipt}
 
 
 def setup(services, registry):
@@ -565,4 +567,5 @@ def setup(services, registry):
     add("json_preview", "Validate and inspect a bounded local JSON file without executing content.", {"path": PATH}, ["path"], files.json_preview)
     add("csv_preview", "Preview up to 30 columns of a local CSV/TSV file.", {"path": PATH, "rows": integer(1, 30)}, ["path"], files.csv_preview)
     add("pdf_metadata", "Inspect PDF page count, encryption flag and metadata (32 MiB maximum).", {"path": PATH}, ["path"], files.pdf_metadata)
-    add("recycle", "Send an approved file/folder to Windows Recycle Bin. Always requires fresh explicit confirmation. Restore through Windows Recycle Bin.", {"path": PATH}, ["path"], files.recycle, 3)
+    add("recycle", "Send an approved file/folder to Windows Recycle Bin with a restoration receipt where supported. Always requires fresh confirmation.", {"path": PATH}, ["path"], files.recycle, 3)
+

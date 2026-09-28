@@ -121,13 +121,14 @@ class ChatJob(QThread):
     activity = Signal(str, object)
     approval = Signal(object)
 
-    def __init__(self, services, text, conversation_id, provider_id, model, parent=None):
+    def __init__(self, services, text, conversation_id, provider_id, model, parent=None, attachments=()):
         super().__init__(parent)
         self.services = services
         self.text = text
         self.conversation_id = conversation_id
         self.provider_id = provider_id
         self.model = model
+        self.attachments = tuple(attachments)
         self.cancel = threading.Event()
 
     def approve(self, request) -> bool:
@@ -140,10 +141,12 @@ class ChatJob(QThread):
 
     def run(self):
         try:
+            extra = {"attachments": self.attachments} if self.attachments else {}
             answer = self.services.chat(
                 self.text, self.conversation_id, self.provider_id, self.model,
                 approve=self.approve, on_event=lambda kind, data: self.activity.emit(kind, data),
                 cancel=self.cancel,
+                **extra,
             )
             self.succeeded.emit(answer)
         except Exception as exc:
@@ -178,3 +181,4 @@ class TextPreview(QDialog):
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+

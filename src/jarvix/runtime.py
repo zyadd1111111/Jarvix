@@ -72,3 +72,4 @@ def operation(cancel=None, approve=None, timeout=120, max_steps=32, unattended=F
         yield context
     finally:
         CURRENT.reset(token)
+

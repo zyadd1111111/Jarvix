@@ -241,3 +241,4 @@ def run_native_script(script, arguments, checkpoint=check_cancelled, timeout=12,
             if process.poll() is None:
                 process.kill()
             process.communicate()
+

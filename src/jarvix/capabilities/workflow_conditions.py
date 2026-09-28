@@ -140,3 +140,4 @@ class ConditionEvaluator:
         expected = c["value"]
         return {"lt": actual < expected, "le": actual <= expected, "eq": actual == expected,
                 "ge": actual >= expected, "gt": actual > expected}[c["op"]]
+

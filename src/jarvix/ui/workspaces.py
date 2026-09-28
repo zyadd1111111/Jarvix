@@ -70,3 +70,4 @@ class WorkspaceDialog(QDialog):
             properties = self.services.registry.get(name).parameters["properties"]
             arguments = {key: value for key, value in record.items() if key in properties and value is not None}
         self.window.open_capabilities(name, arguments)
+

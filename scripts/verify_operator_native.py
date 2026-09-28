@@ -160,3 +160,4 @@ window.close()
 cover.close()
 print(json.dumps(report, indent=2))
 sys.exit(0 if report.get("success") else 1)
+

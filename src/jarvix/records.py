@@ -37,3 +37,4 @@ class RecordStore:
 
     def delete(self, kind, record_id):
         self.db.execute("DELETE FROM records WHERE kind=? AND id=?", (kind, record_id))
+

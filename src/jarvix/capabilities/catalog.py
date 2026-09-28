@@ -31,3 +31,4 @@ def setup(s, registry):
              "Load more tools before using them. Choose families: " + ", ".join(groups) +
              ". Loading capabilities does not execute their actions or read private data.",
              {"groups": array(enum(*groups), 3)}, ("groups",), load)
+

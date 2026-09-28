@@ -44,3 +44,4 @@ def test_window_capture_failure_never_reads_desktop_pixels(monkeypatch):
         native.screenshot("window", handle=123, process_id=42)
     with pytest.raises(ValueError, match="unavailable"):
         native.screenshot("window", handle=123, process_id=99)
+

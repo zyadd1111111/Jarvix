@@ -330,3 +330,4 @@ def test_voice_sends_text_as_stdin_and_terminates_owned_process(monkeypatch, rat
     finally:
         stopped.set()
         voice.close()
+

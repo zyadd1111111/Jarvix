@@ -115,3 +115,4 @@ def setup(s, registry):
              {"id": ID}, ("id",), service.undo, 2, "computer.control")
     register(registry, "actions.undo_history", "List reversible local actions without their private values.",
              {}, (), service.list)
+

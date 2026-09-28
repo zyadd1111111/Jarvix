@@ -12,3 +12,4 @@ if ($process.ExitCode -ne 0 -or -not (Test-Path -LiteralPath (Join-Path $project
     throw "Packaged startup failed (exit $($process.ExitCode))."
 }
 Write-Host "Packaged startup verified: $captureName"
+

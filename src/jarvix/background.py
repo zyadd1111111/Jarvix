@@ -82,6 +82,9 @@ class BackgroundRuntime:
         try:
             with operation(cancel=self._stop, timeout=120, max_steps=64, unattended=True):
                 check_cancelled()
+                if hasattr(self.s, "scheduler"):
+                    self.s.scheduler.drain(cancel=self._stop)
+                check_cancelled()
                 legacy = self.s.run_due_automations()
                 check_cancelled()
                 workflows = self.s.workflows.tick(cancel=self._stop, on_event=self._emit) if hasattr(self.s, "workflows") else []
@@ -101,3 +104,4 @@ class BackgroundRuntime:
                 return {"workflows": workflows, "reminders": reminders}
         finally:
             self._tick_lock.release()
+

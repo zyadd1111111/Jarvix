@@ -551,3 +551,4 @@ def import_definition(window):
 
     layout.addWidget(button("Review import", review, "Primary"))
     dialog.exec()
+

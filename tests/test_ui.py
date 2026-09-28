@@ -424,3 +424,4 @@ def test_app_launch_uses_permission_checked_tool_form(window, tmp_path, monkeypa
     assert window.capability_dialog.selected_tool == "apps.open"
     assert window.capability_dialog.form.arguments() == {"id": record_id}
     assert window.capability_dialog.worker is None
+

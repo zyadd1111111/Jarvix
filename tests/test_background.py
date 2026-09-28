@@ -148,3 +148,4 @@ def test_native_delivery_is_bounded_and_respects_quiet_and_do_not_disturb(servic
         services.settings.set(preference, False)
     runtime.tick_once()
     assert len([event for event in events if event[0] == "notification"]) == 7
+

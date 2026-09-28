@@ -6,19 +6,24 @@ import json
 import re
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 
 from jsonschema import Draft202012Validator
 
 from jarvix.capabilities.schema import ID, array, integer, register, schema, string
 from jarvix.domain import PermissionRequest, ToolResult
 from jarvix.runtime import CURRENT, check_cancelled, operation
+from jarvix.capabilities.checkpoints import CheckpointStore
+from jarvix.capabilities.operator_graph import batches, ordered
 
 EXPECTED = schema({"tool": string(80), "arguments": {"type": "object"},
                    "path": array({"type": ["string", "integer"]}, 12), "equals": {}}, ("tool", "arguments"))
 STEP = schema({"id": string(60), "tool": string(80), "arguments": {"type": "object"},
-               "expected": EXPECTED, "retries": integer(0, 1)}, ("id", "tool", "arguments"))
+               "expected": EXPECTED, "retries": integer(0, 1),
+               "depends_on": {**array(string(60), 24), "uniqueItems": True}}, ("id", "tool", "arguments"))
 PLAN = schema({"goal": string(500), "steps": {**array(STEP, 24), "minItems": 1},
-               "timeout_seconds": integer(1, 600)}, ("goal", "steps"))
+               "timeout_seconds": integer(1, 600), "max_parallel_reads": integer(1, 3)}, ("goal", "steps"))
 PROHIBITED = ("operator.", "actions.undo")
 TERMINAL = {"complete", "failed", "cancelled", "timed_out", "denied", "interrupted"}
 
@@ -66,6 +71,7 @@ class OperatorService:
         self._results = {}
         self._mutations = {}
         self._listeners = []
+        self.checkpoints = CheckpointStore(self.s.records)
         for row in self.s.records.list("operator_session"):
             if row.get("status") not in TERMINAL:
                 row["status"] = "interrupted"
@@ -79,6 +85,15 @@ class OperatorService:
 
     def _publish(self, session, event=None):
         with self._lock:
+            if session["id"] in self._plans:
+                try:
+                    self.checkpoints.save(session["id"], self._plans[session["id"]],
+                                          self._results.get(session["id"], {}), self._mutations.get(session["id"], set()))
+                    session["checkpoint_available"] = True
+                except Exception:
+                    # Never leave a stale checkpoint advertised as the current state.
+                    self.checkpoints.delete(session["id"])
+                    session["checkpoint_available"] = False
             self.s.records.put("operator_session", session, session["id"])
             value = self.get(session["id"])
         for callback in [*self._listeners, *([event] if event else [])]:
@@ -96,8 +111,9 @@ class OperatorService:
     def _validate(self, plan, seed=None):
         if not Draft202012Validator(PLAN).is_valid(plan) or len(json.dumps(plan, allow_nan=False)) > 44000:
             raise ValueError("Use a bounded goal and 1–24 schema-valid steps.")
+        plan = ordered(plan, seed or {})
         current = CURRENT.get()
-        needed = sum(1 + bool(step.get("expected")) for step in plan["steps"])
+        needed = sum(1 + step.get("retries", 0) + bool(step.get("expected")) for step in plan["steps"])
         if current and needed > current.steps_remaining:
             raise ValueError("This plan exceeds the remaining tool-step budget. Split it into smaller plans.")
         previous = set(seed or {})
@@ -214,6 +230,70 @@ class OperatorService:
                 session["status"] = "running"
                 self._publish(session, event)
 
+        def execute_step(step):
+            progress = next(value for value in session["steps"] if value["id"] == step["id"])
+            check_cancelled()
+            writing = self.s.registry.get(step["tool"]).risk != "read"
+            progress.update(status="running", retry_safe=not writing)
+            self._publish(session, event)
+            arguments = _resolve(step["arguments"], results)
+            if writing:
+                fingerprint = step["tool"] + json.dumps(arguments, sort_keys=True)
+                if fingerprint in mutations:
+                    # No execution was attempted by this step.
+                    progress["retry_safe"] = True
+                    raise ValueError("Resolved arguments would repeat an earlier mutation.")
+                mutations.add(fingerprint)
+                self._publish(session, event)  # Persist intent before any side effect.
+            for attempt in range(step.get("retries", 0) + 1):
+                check_cancelled()
+                if attempt:
+                    if cancel.wait(.25):
+                        raise InterruptedError("Operator stopped.")
+                    check_cancelled()
+                progress["attempts"] = attempt + 1
+                outcome = self.s.execute_tool(step["tool"], arguments, approve=approval, cancel=cancel, on_event=event)
+                if not outcome.ok and outcome.sensitivity == "public":
+                    progress["retry_safe"] = True
+                    if writing:
+                        mutations.discard(fingerprint)
+                if outcome.ok or outcome.sensitivity == "public" or cancel.is_set():
+                    break
+            with self._lock:
+                results[step["id"]] = outcome.as_dict()
+            progress["undo_id"] = outcome.data.get("undo_id") if isinstance(outcome.data, dict) else None
+            failed = not self._result_ok(outcome)
+            progress["verified"] = self._intrinsic(step["tool"], outcome)
+            failure_code = "permission_denied" if outcome.sensitivity == "public" else "tool_failed"
+            if not failed and step.get("expected"):
+                expected = step["expected"]
+                verified = self.s.execute_tool(expected["tool"], _resolve(expected["arguments"], results),
+                                               approve=approval, cancel=cancel, on_event=event)
+                matched = self._result_ok(verified)
+                if matched and "equals" in expected:
+                    matched = _path(verified.as_dict(), expected.get("path", ["data"])) == expected["equals"]
+                progress["verified"] = bool(matched)
+                failed = not matched
+                failure_code = "verification_failed"
+            check_cancelled()
+            progress["status"] = "failed" if failed else "complete"
+            if failed:
+                progress.update(error="Action or verification failed. Inspect the current state before retrying.",
+                                failure_code=failure_code,
+                                recovery="Review permissions and retry." if progress["retry_safe"] else
+                                         "Inspect the changed target; create a new plan instead of replaying this action.")
+            elif not progress["verified"]:
+                progress["verification"] = "Tool reported completion; no observable postcondition was supplied."
+            self._publish(session, event)
+            return not failed
+
+        def parallel_step(step, child):
+            token = CURRENT.set(child)
+            try:
+                return execute_step(step)
+            finally:
+                CURRENT.reset(token)
+
         try:
             checkpoint()
             preview = {"goal": plan["goal"], "steps": [{**step,
@@ -227,51 +307,25 @@ class OperatorService:
                 self._publish(session, event)
                 with operation(cancel, approval, timeout=plan.get("timeout_seconds", 120), max_steps=64,
                                on_event=event, checkpoint=checkpoint):
-                    for step, progress in zip(plan["steps"], session["steps"], strict=True):
+                    for batch in batches(plan, self.s.registry, results):
                         check_cancelled()
-                        progress["status"] = "running"
-                        self._publish(session, event)
-                        arguments = _resolve(step["arguments"], results)
-                        writing = self.s.registry.get(step["tool"]).risk != "read"
-                        if writing:
-                            fingerprint = step["tool"] + json.dumps(arguments, sort_keys=True)
-                            if fingerprint in mutations:
-                                raise ValueError("Resolved arguments would repeat an earlier mutation.")
-                            mutations.add(fingerprint)
-                        for attempt in range(step.get("retries", 0) + 1):
-                            check_cancelled()
-                            progress["attempts"] = attempt + 1
-                            progress["retry_safe"] = not writing
-                            outcome = self.s.execute_tool(step["tool"], arguments, approve=approval, cancel=cancel, on_event=event)
-                            if not outcome.ok and outcome.sensitivity == "public":
-                                progress["retry_safe"] = True  # Execution was denied at the host boundary.
-                                if writing:
-                                    mutations.discard(fingerprint)
-                            # Denials and uncertain mutations never qualify for automatic retry.
-                            if outcome.ok or outcome.sensitivity == "public" or cancel.is_set():
-                                break
-                        results[step["id"]] = outcome.as_dict()
-                        progress["undo_id"] = outcome.data.get("undo_id") if isinstance(outcome.data, dict) else None
-                        failed = not self._result_ok(outcome)
-                        progress["verified"] = self._intrinsic(step["tool"], outcome)
-                        if not failed and step.get("expected"):
-                            expected = step["expected"]
-                            verified = self.s.execute_tool(expected["tool"], _resolve(expected["arguments"], results),
-                                                           approve=approval, cancel=cancel, on_event=event)
-                            matched = self._result_ok(verified)
-                            if matched and "equals" in expected:
-                                matched = _path(verified.as_dict(), expected.get("path", ["data"])) == expected["equals"]
-                            progress["verified"] = bool(matched)
-                            failed = not matched
-                        check_cancelled()
-                        progress["status"] = "failed" if failed else "complete"
-                        if failed:
-                            progress["error"] = "Action or verification failed. Inspect the current state before retrying."
+                        if len(batch) == 1:
+                            succeeded = execute_step(batch[0])
+                        else:
+                            parent = CURRENT.get()
+                            budget = sum(1 + step.get("retries", 0) for step in batch)
+                            if parent.steps_remaining < budget:
+                                raise InterruptedError("Operator step budget exhausted.")
+                            parent.steps_remaining -= budget
+                            # Workers own separate execution contexts; budget is reserved
+                            # once by the coordinator, never reset by parallel nested calls.
+                            with ThreadPoolExecutor(max_workers=min(3, len(batch)), thread_name_prefix="JarvixRead") as pool:
+                                futures = [pool.submit(parallel_step, step, replace(parent,
+                                    steps_remaining=1 + step.get("retries", 0), deadline=deadline)) for step in batch]
+                                outcomes = [future.result() for future in futures]
+                            succeeded = all(outcomes)
+                        if not succeeded:
                             session["status"] = "failed"
-                        elif not progress["verified"]:
-                            progress["verification"] = "Tool reported completion; no observable postcondition was supplied."
-                        self._publish(session, event)
-                        if failed:
                             break
                     else:
                         session["status"] = "complete"
@@ -285,6 +339,8 @@ class OperatorService:
                 if step["status"] == "running":
                     step["status"] = session["status"]
                     step["error"] = "Interrupted action may have completed. Inspect state before retrying."
+            session["completed_count"] = sum(step["status"] == "complete" for step in session["steps"])
+            session["partial_completion"] = session["completed_count"] > 0 and session["status"] != "complete"
             self._publish(session, event)
             with self._lock:
                 self._active.pop(session_id, None)
@@ -327,8 +383,16 @@ class OperatorService:
 
     def retry(self, id, approve=None, cancel=None, on_event=None):
         session = self.get(id)
-        if session["status"] not in TERMINAL or id not in self._plans:
-            raise ValueError("Only a stopped session from this app run can be retried. Re-plan older sessions.")
+        if session["status"] not in TERMINAL:
+            raise ValueError("Stop the active session before recovery.")
+        restarted = id not in self._plans
+        if restarted:
+            try:
+                saved = self.checkpoints.load(id)
+                self._plans[id], self._results[id] = saved["plan"], saved["results"]
+                self._mutations[id] = set(saved["mutations"])
+            except Exception:
+                raise ValueError("No valid protected checkpoint is available. Re-plan this older session.") from None
         if session.get("retry_session_id"):
             raise ValueError("This plan already has a recovery session. Continue that session instead.")
         remaining = {step["id"] for step in session["steps"] if step["status"] != "complete"}
@@ -336,11 +400,28 @@ class OperatorService:
             raise ValueError("There are no failed or pending steps.")
         if any(step["id"] in remaining and step.get("retry_safe") is False for step in session["steps"]):
             raise ValueError("A failed action may already have changed the computer. Inspect its state and create a new plan before repeating it.")
+        if restarted:
+            # Fresh reads replace stale observations. Mutations and their receipts
+            # are reused, never repeated merely because the app was restarted.
+            remaining |= {step["id"] for step in session["steps"]
+                          if self.s.registry.get(step["tool"]).risk == "read"}
         plan = copy.deepcopy(self._plans[id])
         plan["steps"] = [step for step in plan["steps"] if step["id"] in remaining]
         seed = {key: value for key, value in self._results.get(id, {}).items() if key not in remaining}
         return self.run(plan, approve, cancel, on_event, _seed=seed, _parent=id,
                         _mutations=self._mutations.get(id))
+
+    def forget_checkpoint(self, id):
+        if id in self._active:
+            raise ValueError("Stop the active session before removing its checkpoint.")
+        self.checkpoints.delete(id)
+        self._plans.pop(id, None)
+        self._results.pop(id, None)
+        self._mutations.pop(id, None)
+        session = self.get(id)
+        session["checkpoint_available"] = False
+        self.s.records.put("operator_session", session, id)
+        return {"removed": True, "history_retained": True}
 
     def undo(self, id, step_id, approve=None, cancel=None, on_event=None):
         session = self.get(id)
@@ -378,3 +459,6 @@ def setup(s, registry):
         register(registry, f"operator.{name}", f"{name.title()} an active operator session.", {"id": ID}, ("id",), getattr(service, name), 2)
     register(registry, "operator.retry", "Review and retry reads, denied actions and pending steps. Uncertain mutations require inspection and a new plan.",
              {"id": ID}, ("id",), service.retry, 3)
+    register(registry, "operator.forget_checkpoint", "Remove protected private recovery data for a stopped session, retaining its public action timeline.",
+             {"id": ID}, ("id",), service.forget_checkpoint, 3)
+

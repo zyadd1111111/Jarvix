@@ -16,3 +16,4 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
       - run: python -m build --wheel
+

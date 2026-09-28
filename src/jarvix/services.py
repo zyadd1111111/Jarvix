@@ -58,11 +58,11 @@ class Services:
         self._roots_lock = threading.RLock()
         from jarvix.capabilities import files, developer, computer, productivity, browser, workspaces
         from jarvix.capabilities import notifications, automations, chat_management, integration, catalog
-        from jarvix.capabilities import desktop, workflows, operator, undo, context
+        from jarvix.capabilities import desktop, workflows, operator, undo, context, scheduler, recycle
         from jarvix.speech_input import SpeechInputService
         for module in (files, developer, computer, productivity, browser, workspaces,
                        notifications, automations, chat_management, integration, desktop, workflows,
-                       undo, operator, context, catalog):
+                       undo, operator, context, scheduler, recycle, catalog):
             module.setup(self, self.registry)
         self.microphone = SpeechInputService(self)
         from jarvix.background import BackgroundRuntime
@@ -88,6 +88,10 @@ class Services:
                 preview_arguments = arguments
                 app_preview = None
                 workflow_snapshot = None
+                schedule_snapshot = None
+                if name == "scheduler.install":
+                    schedule_snapshot = self.scheduler.approval_snapshot(arguments)
+                    preview_arguments = {**arguments, "schedule": self.scheduler.preview(**arguments)}
                 if name in {"workflows.toggle", "workflows.run", "routines.run"}:
                     workflow_snapshot = self.records.get("workflow", arguments["id"])["approval_fingerprint"]
                     preview_arguments = {**arguments, "workflow": self.workflows.preview(arguments["id"])}
@@ -108,6 +112,8 @@ class Services:
                     return ToolResult(False, error="Permission denied or the required access switch is off.", sensitivity="public")
                 if workflow_snapshot and self.records.get("workflow", arguments["id"])["approval_fingerprint"] != workflow_snapshot:
                     return ToolResult(False, error="Workflow changed during approval. Preview it again.", sensitivity="public")
+                if schedule_snapshot and self.scheduler.approval_snapshot(arguments) != schedule_snapshot:
+                    return ToolResult(False, error="Scheduled workflow changed during approval. Preview it again.", sensitivity="public")
                 check_cancelled()
                 on_event = on_event or context.on_event
                 if on_event:
@@ -376,7 +382,7 @@ class Services:
                                                                 if spec.name in self.enabled_tools()])],
                 "policy": "The next submitted message is added to this bounded history. Tool results require disclosure approval. No unrelated local records are attached."}
 
-    def chat(self, text, conversation_id, provider_id, model, approve, on_event, cancel):
+    def chat(self, text, conversation_id, provider_id, model, approve, on_event, cancel, attachments=()):
         text = required_text(text, "Message", 16000)
         if not self._chat_lock.acquire(blocking=False):
             raise RuntimeError("A request is already running.")
@@ -391,8 +397,15 @@ class Services:
                 provider = create_provider(provider_id, key)
                 try:
                     with operation(cancel, approve, timeout=self.settings.get("agent.timeout_seconds", 120)):
+                        from jarvix.attachments import disclose_images
+                        messages = bounded_history(self.conversation_messages(conversation_id))
+                        images = disclose_images(attachments, provider, model, approve, self.repository)
+                        if images:
+                            messages[-1].images = images
+                            self.records.put("chat_attachment", {"conversation_id": conversation_id,
+                                "images": [image.description() for image in images], "provider": provider_id})
                         answer = self.orchestrator.run(provider, required_text(model, "Model", 150),
-                                bounded_history(self.conversation_messages(conversation_id)), self.enabled_tools(),
+                                messages, self.enabled_tools(),
                                 approve, on_event, cancel, lambda value: setattr(self, "latest_context", value),
                                 max_rounds=self.settings.get("agent.max_rounds", 6))
                 except ProviderError as exc:
@@ -526,7 +539,10 @@ class Services:
         self.voice.close()
         if hasattr(self, "integrations"):
             self.integrations.close()
+        if hasattr(self, "browser"):
+            self.browser.disconnect()
         if hasattr(self, "microphone"):
             self.microphone.close()
         if hasattr(self, "developer") and hasattr(self.developer, "close"):
             self.developer.close()
+

@@ -2,17 +2,40 @@
 from __future__ import annotations
 
 import json
+import base64
+from pathlib import Path
+from uuid import uuid4
 
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QTextDocument, QDesktopServices
+from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtGui import QTextDocument, QDesktopServices, QPixmap
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem, QFrame,
     QScrollArea, QComboBox, QLineEdit, QDialog, QPlainTextEdit, QTextBrowser,
-    QSplitter, QApplication, QInputDialog,
+    QSplitter, QApplication, QInputDialog, QFileDialog, QLabel, QMenu,
 )
 
 from .pages import Page, pretty_date
 from .widgets import label, button, Composer, ChatJob, SignalOrb, clear_layout, TextPreview
+
+
+class ImageComposer(Composer):
+    images_dropped = Signal(list)
+    image_pasted = Signal(object)
+
+    def canInsertFromMimeData(self, source):
+        return source.hasImage() or source.hasUrls() or super().canInsertFromMimeData(source)
+
+    def insertFromMimeData(self, source):
+        if source.hasImage():
+            self.image_pasted.emit(source.imageData())
+        elif source.hasUrls():
+            paths = [url.toLocalFile() for url in source.urls() if url.isLocalFile()]
+            if paths:
+                self.images_dropped.emit(paths)
+            else:
+                super().insertFromMimeData(source)
+        else:
+            super().insertFromMimeData(source)
 
 
 class MessageText(QTextBrowser):
@@ -77,6 +100,18 @@ class PermissionDialog(QDialog):
         row.addWidget(self.deny_button)
         row.addWidget(self.allow_button)
         layout.addLayout(row)
+        if request.images:
+            pictures = QHBoxLayout()
+            for image in request.images:
+                thumbnail = QLabel()
+                pixmap = QPixmap()
+                pixmap.loadFromData(base64.b64decode(image.data_base64))
+                thumbnail.setPixmap(pixmap.scaled(240, 160, Qt.AspectRatioMode.KeepAspectRatio,
+                                                 Qt.TransformationMode.SmoothTransformation))
+                thumbnail.setToolTip(image.name)
+                pictures.addWidget(thumbnail)
+            layout.insertLayout(4, pictures)
+            self.resize(860, 700)
 
 
 class ChatPage(Page):
@@ -90,6 +125,13 @@ class ChatPage(Page):
         self.last_answer = ""
         self.pending_dialog = None
         self.operator_items = {}
+        self.attachments = []
+        self.stream_frame = None
+        self.stream_widget = None
+        self.stream_buffer = ""
+        self.stream_timer = QTimer(self)
+        self.stream_timer.setInterval(50)
+        self.stream_timer.timeout.connect(self.flush_stream)
         split = QSplitter()
         history_widget = QWidget()
         history_layout = QVBoxLayout(history_widget)
@@ -146,12 +188,19 @@ class ChatPage(Page):
         self.timeline.setVisible(False)
         self.timeline.itemActivated.connect(self.inspect_event)
         body.addWidget(self.timeline)
-        self.composer = Composer()
+        self.attachment_label = label("Images stay local until you approve cloud vision for this request.", "Muted", True)
+        body.addWidget(self.attachment_label)
+        self.composer = ImageComposer()
         self.composer.setPlaceholderText("Message Jarvix…    Enter to send · Shift+Enter for a new line")
         self.composer.setFixedHeight(92)
         self.composer.submitted.connect(self.send)
+        self.composer.images_dropped.connect(self.add_images)
+        self.composer.image_pasted.connect(self.paste_image)
         body.addWidget(self.composer)
         actions = QHBoxLayout()
+        actions.addWidget(button("Attach", self.choose_images, "Quiet"))
+        actions.addWidget(button("Screen", self.screen_menu, "Quiet"))
+        actions.addWidget(button("Clear images", self.clear_images, "Quiet"))
         self.connection = label("", "Muted")
         actions.addWidget(self.connection)
         actions.addStretch()
@@ -279,11 +328,15 @@ class ChatPage(Page):
         self.operator_items.clear()
         self.timeline.hide()
         self.composer.clear()
+        self.clear_images()
         self.render_messages()
         self.refresh_history()
         self.composer.setFocus()
 
     def render_messages(self):
+        self.stream_timer.stop()
+        self.stream_frame = self.stream_widget = None
+        self.stream_buffer = ""
         clear_layout(self.messages)
         self.last_answer = ""
         rows = self.services.conversation_messages(self.conversation_id) if self.conversation_id else []
@@ -334,11 +387,102 @@ class ChatPage(Page):
         self.composer.setPlainText(text)
         self.composer.setFocus()
 
+    def choose_images(self):
+        if not self.busy:
+            paths, _ = QFileDialog.getOpenFileNames(self, "Attach images", "", "Images (*.png *.jpg *.jpeg *.webp *.bmp)")
+            self.add_images(paths)
+
+    def add_images(self, paths):
+        if self.busy:
+            return
+        selected = list(dict.fromkeys([*self.attachments, *paths]))
+        if len(selected) > 4 or any(Path(path).suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp", ".bmp"} for path in selected):
+            self.window.notify("Attach up to four PNG, JPEG, WebP or BMP images.")
+            return
+        self.attachments = selected
+        self.attachment_label.setText("Local images · " + ", ".join(Path(path).name for path in selected)
+                                      if selected else "Images stay local until you approve cloud vision for this request.")
+
+    def clear_images(self):
+        self.attachments = []
+        self.attachment_label.setText("Images stay local until you approve cloud vision for this request.")
+
+    def paste_image(self, image):
+        if self.busy:
+            return
+        if not self.services.settings.get("clipboard.enabled", False):
+            self.window.notify("Enable clipboard permission in Settings before pasting an image.")
+            return
+        if len(self.attachments) >= 4:
+            self.window.notify("Attach at most four images per request.")
+            return
+        from jarvix.capabilities.files import _linked
+        directory = self.services.data_dir / "attachments"
+        if any(_linked(part) for part in (directory, *directory.parents)):
+            self.window.notify("The attachment directory must be local and cannot be a link.")
+            return
+        directory.mkdir(exist_ok=True)
+        path = directory / f"clipboard-{uuid4().hex}.png"
+        if image is None or image.isNull() or image.width() * image.height() > 32_000_000 or not image.save(str(path), "PNG"):
+            self.window.notify("The clipboard image could not be saved within image limits.")
+            return
+        self.add_images([str(path)])
+
+    def screen_menu(self):
+        if self.busy:
+            return
+        menu = QMenu(self)
+        menu.addAction("Attach active app screenshot", self.capture_active)
+        menu.addAction("Attach selected monitor screenshot", self.choose_monitor)
+        menu.addAction("Local OCR of recent screenshot", lambda: self.window.open_capabilities("vision.read_text", {}))
+        menu.exec(self.mapToGlobal(self.rect().center()))
+
+    def capture_active(self):
+        if not self.services.settings.get("screenshots.enabled", False):
+            self.window.notify("Enable screenshot permission in Settings first.")
+            return
+        self.window.hide()
+        def done(result):
+            self.window.show()
+            self.window.activateWindow()
+            self.add_images([result["path"]])
+        def failed(error):
+            self.window.show()
+            self.window.notify(error)
+        QTimer.singleShot(350, self, lambda: self.window.run_job(lambda: self.services.vision.capture("active"), done, failed))
+
+    def choose_monitor(self):
+        def choose(monitors):
+            names = [f"{row['index']}: {row.get('device', 'Display')} · {row['width']}×{row['height']}" for row in monitors]
+            name, ok = QInputDialog.getItem(self, "Capture monitor", "Choose a display; hide private content before capturing.", names, 0, False)
+            if ok:
+                monitor = monitors[names.index(name)]["index"]
+                self.window.run_job(lambda: self.services.vision.capture("monitor", monitor=monitor),
+                                    lambda result: self.add_images([result["path"]]))
+        self.window.run_job(self.services.system.monitors, choose)
+
+    def clear_stream(self):
+        self.stream_timer.stop()
+        if self.stream_frame:
+            self.messages.removeWidget(self.stream_frame)
+            self.stream_frame.deleteLater()
+        self.stream_frame = self.stream_widget = None
+        self.stream_buffer = ""
+
+    def flush_stream(self):
+        if self.stream_widget:
+            self.stream_widget.document().setMarkdown(self.stream_buffer, QTextDocument.MarkdownFeature.MarkdownNoHTML)
+            self.stream_widget.fit()
+            self.scroll_to_bottom()
+        self.stream_timer.stop()
+
     def send(self):
         if self.busy:
             return
         text = self.composer.toPlainText().strip()
         model = self.model.text().strip()
+        if not text and self.attachments:
+            text = "Describe these attached images."
         if not text:
             return
         if not model:
@@ -361,7 +505,9 @@ class ChatPage(Page):
         self.history.setEnabled(False)
         provider = self.provider.currentData()
         self.services.settings.set("model." + provider, model)
-        self.worker = ChatJob(self.services, text, self.conversation_id, provider, model, self)
+        selected_images = tuple(self.attachments)
+        self.clear_images()
+        self.worker = ChatJob(self.services, text, self.conversation_id, provider, model, self, attachments=selected_images)
         self.worker.succeeded.connect(self.completed)
         self.worker.failed.connect(self.failed)
         self.worker.activity.connect(self.on_activity)
@@ -371,6 +517,29 @@ class ChatPage(Page):
 
     def on_activity(self, kind, data):
         if self.window.closing:
+            return
+        if kind == "stream_start":
+            self.clear_stream()
+            return
+        if kind == "text_delta":
+            if not self.stream_widget:
+                self.stream_frame = QFrame()
+                self.stream_frame.setObjectName("Message")
+                layout = QVBoxLayout(self.stream_frame)
+                layout.addWidget(label("JARVIX · Responding", "Eyebrow"))
+                self.stream_widget = MessageText("")
+                layout.addWidget(self.stream_widget)
+                self.messages.addWidget(self.stream_frame)
+            self.stream_buffer += data["text"]
+            if not self.stream_timer.isActive():
+                self.stream_timer.start()
+            self.activity.setText("Receiving response…")
+            return
+        if kind == "stream_end":
+            self.flush_stream()
+            if data.get("status") == "tools":
+                self.clear_stream()
+                self.activity.setText("Planning tool actions…")
             return
         if kind in {"tool", "tool_result", "usage", "operator_session"}:
             if kind == "operator_session":
@@ -479,13 +648,15 @@ class ChatPage(Page):
         self.activity.setText("Saved locally · tool results were shared only with your approval")
         self.refresh_history()
         self.window.update_status()
-        if self.services.settings.get("voice.responses", False) and not self.window.closing:
+        if self.services.settings.get("voice.responses", False) and not self.window.closing and not (self.worker and self.worker.cancel.is_set()):
             self.window.run_job(lambda: self.services.speak(answer), self.window.pages["Voice"].speech_started)
 
     def failed(self, message):
         if self.window.closing:
             return
-        self.add_message("assistant", "The request could not complete.\n\n" + message)
+        partial = self.stream_buffer
+        self.clear_stream()
+        self.add_message("assistant", (partial + "\n\n" if partial else "") + "The request could not complete.\n\n" + message)
         self.activity.setText("Request failed · you can try again")
         self.refresh_history()
 
@@ -512,3 +683,4 @@ class ChatPage(Page):
     def inspect_context(self):
         preview = self.services.context_preview(self.conversation_id, self.provider.currentData(), self.model.text().strip())
         TextPreview("AI context preview", "Conversation context and enabled tools for the next request. Your unsent draft is not included in this preview.", json.dumps(preview, indent=2, ensure_ascii=False, default=str), self).exec()
+

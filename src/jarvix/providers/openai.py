@@ -13,13 +13,20 @@ from jarvix.providers._transport import (
 
 class OpenAIProvider:
     id = "openai"
+    supports_vision = True
 
     def __init__(self, api_key: str, client: httpx.Client | None = None) -> None:
         self._transport = Transport(api_key, client)
 
     def complete(self, messages: list[Message], tools: list[ToolSpec], model: str) -> Completion:
         model = validate_model(model)
-        names = name_map(tools)
+        data = self._transport.request(
+            "https://api.openai.com/v1/chat/completions", self._payload(messages, tools, model),
+            {"Authorization": f"Bearer {self._transport._api_key}"},
+        )
+        return self._parse(data, tools, model)
+
+    def _payload(self, messages, tools, model):
         payload: dict = {
             "model": model, "messages": [self._message(m) for m in messages],
             "max_completion_tokens": MAX_OUTPUT_TOKENS, "store": False,
@@ -30,10 +37,72 @@ class OpenAIProvider:
             }} for t in tools]
             payload["tool_choice"] = "auto"
             payload["parallel_tool_calls"] = False
-        data = self._transport.request(
-            "https://api.openai.com/v1/chat/completions", payload,
-            {"Authorization": f"Bearer {self._transport._api_key}"},
-        )
+        return payload
+
+    def stream(self, messages, tools, model, on_delta):
+        model = validate_model(model)
+        payload = self._payload(messages, tools, model)
+        payload.update(stream=True, stream_options={"include_usage": True})
+        text, refusal, calls, usage, finish = "", "", {}, {}, None
+        for event in self._transport.events("https://api.openai.com/v1/chat/completions", payload,
+                                           {"Authorization": f"Bearer {self._transport._api_key}"}):
+            try:
+                choices = event.get("choices", [])
+                if not isinstance(choices, list) or len(choices) > 1 or "error" in event:
+                    raise ValueError
+                if event.get("usage"):
+                    usage = event["usage"]
+                if not choices:
+                    continue
+                choice = choices[0]
+                if "message" in choice:
+                    result = self._parse(event, tools, model)
+                    on_delta(result.message.content)
+                    return result
+                if choice.get("index", 0) != 0 or finish is not None:
+                    raise ValueError
+                delta = choice["delta"]
+                if delta.get("role", "assistant") != "assistant":
+                    raise ValueError
+                for key in ("content", "refusal"):
+                    part = delta.get(key) or ""
+                    if not isinstance(part, str):
+                        raise ValueError
+                    if key == "content":
+                        text += part
+                    else:
+                        refusal += part
+                    if part:
+                        on_delta(part)
+                for call in delta.get("tool_calls") or []:
+                    index = call["index"]
+                    if not isinstance(index, int) or not 0 <= index < MAX_TOOL_CALLS:
+                        raise ValueError
+                    target = calls.setdefault(index, {"id": "", "type": "function", "function": {"name": "", "arguments": ""}})
+                    if call.get("type", "function") != "function":
+                        raise ValueError
+                    if call.get("id"):
+                        if not isinstance(call["id"], str):
+                            raise ValueError
+                        target["id"] += call["id"]
+                    for key in ("name", "arguments"):
+                        value = call.get("function", {}).get(key) or ""
+                        if not isinstance(value, str):
+                            raise ValueError
+                        target["function"][key] += value
+                    if len(target["function"]["arguments"].encode()) > MAX_ARGUMENT_BYTES:
+                        raise ValueError
+                finish = choice.get("finish_reason")
+            except (KeyError, IndexError, TypeError, ValueError, AttributeError):
+                raise ProviderError("OpenAI returned an unsupported stream. No tool was executed.") from None
+        data = {"choices": [{"finish_reason": finish, "message": {
+            "role": "assistant", "content": text, "refusal": refusal,
+            "tool_calls": [calls[index] for index in sorted(calls)],
+        }}], "usage": usage}
+        return self._parse(data, tools, model)
+
+    def _parse(self, data, tools, model):
+        names = name_map(tools)
         try:
             choice = data["choices"][0]
             finish = choice.get("finish_reason")
@@ -79,6 +148,14 @@ class OpenAIProvider:
     @staticmethod
     def _message(message: Message) -> dict:
         value: dict = {"role": message.role, "content": message.content}
+        if message.images:
+            if message.role != "user":
+                raise ProviderError("Images may only be attached to a user message.")
+            value["content"] = [{"type": "text", "text": message.content}, *[{
+                "type": "image_url", "image_url": {
+                    "url": f"data:{image.mime_type};base64,{image.data_base64}", "detail": "auto",
+                },
+            } for image in message.images]]
         if message.role == "assistant" and message.tool_calls:
             value["content"] = message.content or None
             value["tool_calls"] = [{
@@ -91,3 +168,4 @@ class OpenAIProvider:
                 raise ProviderError("The conversation contains an unmatched tool result. Start a new conversation.")
             value["tool_call_id"] = message.tool_call_id
         return value
+

@@ -11,6 +11,7 @@ from jarvix.security import PermissionService
 from jarvix.storage import Repository
 from jarvix.runtime import check_cancelled
 from jarvix.capabilities.catalog import BASE_TOOLS, initial_tools
+from jarvix.attachments import context_message
 
 SYSTEM_PROMPT = """You are Jarvix, a personal desktop AI assistant. Be clear, accurate and concise.
 Use registered tools for computer actions and local facts. Do not claim an action happened unless its tool succeeded.
@@ -37,6 +38,7 @@ For scheduled workspaces, inspect workspaces.preview and copy its approved concr
 Never schedule workspaces.launch, UI input, terminal commands, or nested workflows; these need interactive control.
 Distinguish school days from weekdays: ask if a school holiday calendar is intended; no school-calendar integration is available.
 Never silently retry failed writes. Re-observe state, explain partial completion and offer supported undo.
+Images are shared only for the current request; images mentioned in past messages are not available unless reattached.
 """
 
 
@@ -81,17 +83,41 @@ class Orchestrator:
             if cancel.is_set():
                 return "Request stopped. Any already completed local actions remain in Activity."
             payload = {"provider": provider.id, "model": model,
-                       "messages": [asdict(message) for message in messages],
+                       "messages": [context_message(message) for message in messages],
                        "tools": [asdict(spec) for spec in specs]}
             if on_context:
                 on_context(payload)
             on_event("provider", {"status": "Thinking", "provider": provider.id})
-            completion = provider.complete(messages, specs, model)
+            streamed = []
+            def on_delta(text, fragments=streamed, round_index=_round):
+                if cancel.is_set():
+                    raise InterruptedError("Request stopped.")
+                check_cancelled()
+                fragments.append(text)
+                on_event("text_delta", {"text": text, "round": round_index})
+            on_event("stream_start", {"round": _round})
+            try:
+                if callable(getattr(provider, "stream", None)):
+                    completion = provider.stream(messages, specs, model, on_delta)
+                else:
+                    completion = provider.complete(messages, specs, model)
+            except InterruptedError:
+                partial = "".join(streamed).strip()
+                on_event("stream_end", {"status": "cancelled"})
+                return (partial + "\n\n" if partial else "") + "Request stopped or timed out. Completed actions are in Activity."
+            except ProviderError as exc:
+                on_event("stream_end", {"status": "error"})
+                if streamed:
+                    return "".join(streamed).strip() + "\n\nResponse interrupted: " + str(exc)
+                raise
             if completion.usage:
                 on_event("usage", completion.usage)
             if cancel.is_set():
-                return "Request stopped. Any already completed local actions remain in Activity."
+                on_event("stream_end", {"status": "cancelled"})
+                partial = "".join(streamed).strip()
+                return (partial + "\n\n" if partial else "") + "Request stopped. Any already completed local actions remain in Activity."
             assistant = completion.message
+            on_event("stream_end", {"status": "tools" if assistant.tool_calls else "complete"})
             if not assistant.tool_calls:
                 return assistant.content.strip() or "The provider returned an empty answer. Please try again."
             if len(assistant.tool_calls) + calls_used > 12:
@@ -156,3 +182,4 @@ class Orchestrator:
                 messages.append(Message("tool", json.dumps(result, ensure_ascii=False, default=str),
                                         tool_call_id=call.id, name=call.name))
         raise ProviderError("The planning limit was reached. Completed actions are in Activity; narrow the request to continue.")
+

@@ -200,3 +200,4 @@ def test_workspace_stops_after_nested_routine_permission_denial(services):
     assert not services.list_notes()
     assert not services.list_memories()
     assert services.automation.history(following) == []
+

@@ -421,3 +421,4 @@ def setup(s, registry):
         {"id": ID}, ["id"], workspaces.close, 3)
     add("workspaces.open_terminal", "Open a Windows PowerShell terminal with profiles disabled in an allowed directory. Does not execute a command.",
         {"path": string()}, ["path"], workspaces.open_terminal, 2)
+

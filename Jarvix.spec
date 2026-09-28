@@ -33,3 +33,4 @@ exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name=app_name, debug=False,
           bootloader_ignore_signals=False, strip=False, upx=False, console=debug_console,
           icon=str(root / "src" / "jarvix" / "assets" / "jarvix.ico"))
 coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name=app_name)
+

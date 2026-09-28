@@ -329,3 +329,4 @@ def test_background_lives_while_hidden_and_shutdown_waits_without_blocking(windo
         release.set()
     wait_until(app, lambda: not window.isVisible() and not background.running)
     assert not window.shutdown_timer.isActive()
+

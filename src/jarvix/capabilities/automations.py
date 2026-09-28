@@ -286,3 +286,4 @@ def setup(s, registry):
     register(registry, "automations.delete", "Delete a local routine.", {"id": ID}, ("id",), service.delete, 3)
     register(registry, "automations.history", "Read routine outcomes without private action values.", {"id": string(160, 0)}, (), service.history)
     register(registry, "automations.templates", "List usable routine templates.", {}, (), service.templates)
+

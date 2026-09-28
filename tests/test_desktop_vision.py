@@ -132,3 +132,4 @@ def test_bounded_protection_inspection_cannot_authorize_window_capture(vision):
     with pytest.raises(PermissionError, match="fully checked"):
         vision.capture()
     assert vision.services.records.list("vision_capture") == []
+

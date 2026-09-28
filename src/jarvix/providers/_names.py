@@ -27,3 +27,4 @@ def domain_name(name: object, names: dict[str, str]) -> str:
     if not isinstance(name, str) or name not in names:
         raise ProviderError("The AI provider requested an unregistered tool. No tool was executed.")
     return names[name]
+

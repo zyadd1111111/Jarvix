@@ -77,6 +77,9 @@ class SpeechInputService:
                     "busy": bool(self._thread and self._thread.is_alive())}
 
     def start(self, device=None, silence_timeout=2.0):
+        wake = getattr(self.s, "wake_word", None)
+        if wake and wake.state()["busy"]:
+            raise RuntimeError("Disable wake mode before starting manual dictation.")
         with self._lock:
             generation = self._request_generation
         if not self.s.settings.get("microphone.enabled", False):
@@ -217,3 +220,4 @@ class SpeechInputService:
         self.cancel()
         if self._thread and self._thread is not threading.current_thread():
             self._thread.join(timeout=2)
+

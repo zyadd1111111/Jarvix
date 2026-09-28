@@ -71,3 +71,4 @@ def setup(s, registry):
              {"include_clipboard": BOOL, "include_selected_files": BOOL}, (), service.inspect)
     register(registry, "context.select", "Explicitly select a known project/conversation/allowed files for this session's context.",
              {"conversation_id": ID, "project_id": ID, "selected_files": array(string(), 20)}, (), service.set_current, 2)
+

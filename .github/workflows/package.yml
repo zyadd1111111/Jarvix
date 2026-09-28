@@ -1,0 +1,50 @@
+name: Package Jarvix
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  windows-package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: python -m pip install -e ".[dev]"
+      - run: python -m pip check
+      - run: ruff check src tests scripts
+      - run: python -m pytest -q
+        env:
+          QT_QPA_PLATFORM: offscreen
+      - run: python -m PyInstaller --noconfirm Jarvix.spec
+      - run: python -m build --wheel
+      - name: Read project version
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path pyproject.toml -Pattern '^version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
+          "JARVIX_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+      - name: Add release documentation
+        shell: pwsh
+        run: Copy-Item README.md, SECURITY.md, LICENSE -Destination dist/Jarvix
+      - name: Create Windows archive
+        shell: pwsh
+        run: Compress-Archive -LiteralPath dist/Jarvix -DestinationPath dist/Jarvix-$env:JARVIX_VERSION-windows-x64.zip -Force
+      - name: Upload Jarvix package
+        uses: actions/upload-artifact@v4
+        with:
+          name: Jarvix-${{ env.JARVIX_VERSION }}-windows-x64
+          path: |
+            dist/Jarvix-${{ env.JARVIX_VERSION }}-windows-x64.zip
+            dist/*.whl
+          if-no-files-found: error
+

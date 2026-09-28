@@ -99,3 +99,4 @@ def test_browser_import_is_all_or_nothing_and_groups_check_every_action(services
     monkeypatch.setattr(services, "execute_tool", lambda name, args: calls.append((name, args)) or ToolResult(False, {}))
     assert browser.open_group(group_id)["completed"] is False
     assert calls == [("web.open", {"url": "https://example.org"})]
+

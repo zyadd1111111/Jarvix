@@ -51,7 +51,7 @@ class Database:
         with self.connect() as conn:
             conn.execute("PRAGMA journal_mode=WAL")
             version = conn.execute("PRAGMA user_version").fetchone()[0]
-            if version > 3:
+            if version > 4:
                 raise RuntimeError("This data directory requires a newer Jarvix version.")
             if version == 0:
                 conn.executescript("BEGIN IMMEDIATE;\n" + SCHEMA + "\nCOMMIT;")
@@ -70,6 +70,34 @@ class Database:
                     CREATE INDEX IF NOT EXISTS conversations_recent ON conversations(updated_at DESC, id DESC);
                     PRAGMA user_version = 3;
                     COMMIT;""")
+            if version < 4:
+                # 0.4 adds these tables/columns, while keeping the v3 schema
+                # marker for compatibility with existing migration clients.
+                # Inspect the column first because older profiles may be
+                # opened repeatedly before a future schema marker is added.
+                conn.executescript("""BEGIN IMMEDIATE;
+                    CREATE TABLE IF NOT EXISTS integrations (
+                        id TEXT PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        status TEXT NOT NULL DEFAULT 'disconnected',
+                        account TEXT,
+                        last_activity TEXT,
+                        created_at TEXT NOT NULL
+                    );
+                    CREATE TABLE IF NOT EXISTS scheduled_tasks (
+                        id TEXT PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        workflow_id TEXT NOT NULL,
+                        schedule_type TEXT NOT NULL,
+                        schedule_data TEXT NOT NULL,
+                        enabled INTEGER NOT NULL DEFAULT 1,
+                        last_run TEXT,
+                        created_at TEXT NOT NULL
+                    );
+                    COMMIT;""")
+                columns = {row[1] for row in conn.execute("PRAGMA table_info(messages)").fetchall()}
+                if "attachments" not in columns:
+                    conn.execute("ALTER TABLE messages ADD COLUMN attachments TEXT")
         try:
             self.path.chmod(0o600)
         except OSError:
@@ -157,7 +185,7 @@ class SettingsRepository:
 
 class Repository:
     """Only explicit application-owned tables can be addressed through this repository."""
-    _tables = {"notes", "memories", "tasks", "projects", "apps", "automations", "conversations"}
+    _tables = {"notes", "memories", "tasks", "projects", "apps", "automations", "conversations", "integrations", "scheduled_tasks"}
 
     def __init__(self, db: Database):
         self.db = db
@@ -189,3 +217,4 @@ class Repository:
     @staticmethod
     def new_id() -> str:
         return uuid.uuid4().hex
+

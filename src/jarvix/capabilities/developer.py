@@ -429,3 +429,4 @@ def setup(services, registry):
     add("command_output", "Read incremental stdout/stderr from an owned command session; pass the returned offset to continue.", {"session_id": string(100), "offset": integer(0, 2**53), "max_chars": integer(100, 20000)}, ["session_id"], developer.command_output)
     add("command_cancel", "Stop an owned active command and its current child processes; no arbitrary PIDs accepted.", {"session_id": string(100)}, ["session_id"], developer.command_cancel, 2)
     add("command_history", "List command metadata without arguments/output; current sessions include running state and exit code.", {"limit": integer(1, 100)}, [], developer.command_history)
+

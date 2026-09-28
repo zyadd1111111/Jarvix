@@ -3,18 +3,22 @@ from __future__ import annotations
 
 import json
 import re
+import threading
+import time
+from collections.abc import Iterator
 from typing import Any
 
 import httpx
 
 from jarvix.domain import ProviderError
-from jarvix.runtime import check_cancelled
+from jarvix.runtime import CURRENT, check_cancelled
 
 MAX_REQUEST_BYTES = 512 * 1024
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 MAX_ARGUMENT_BYTES = 32 * 1024
 MAX_TOOL_CALLS = 16
 MAX_OUTPUT_TOKENS = 4096
+MAX_IMAGE_REQUEST_BYTES = 18 * 1024 * 1024
 TIMEOUT = httpx.Timeout(connect=10, read=60, write=15, pool=10)
 
 
@@ -72,7 +76,7 @@ class Transport:
     def request(self, url: str, payload: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
         check_cancelled()
         body = dump_json(payload).encode("utf-8")
-        if len(body) > MAX_REQUEST_BYTES:
+        if len(body) > self._request_limit(payload):
             raise ProviderError("This conversation exceeds the local request limit. Start a new conversation or shorten it.")
         # A fresh owned client is closed even on error. HTTPX's default transport
         # has zero retries; redirects are disabled even on injected test clients.
@@ -104,6 +108,98 @@ class Transport:
                 client.close()
 
     @staticmethod
+    def _request_limit(payload):
+        # Images are independently bounded and approved before encoding. Ordinary
+        # text keeps the much smaller existing context limit.
+        messages = payload.get("messages", [])
+        contents = payload.get("contents", [])
+        has_images = any(isinstance(m.get("content"), list) and any(
+            p.get("type") == "image_url" for p in m["content"]) for m in messages)
+        has_images |= any(any("inlineData" in p for p in c.get("parts", [])) for c in contents)
+        return MAX_IMAGE_REQUEST_BYTES if has_images else MAX_REQUEST_BYTES
+
+    def events(self, url: str, payload: dict, headers: dict) -> Iterator[dict]:
+        """Bounded SSE decoding, with cancellation even while waiting for bytes.
+
+        A JSON response is accepted for compatible gateways; it remains subject
+        to the adapter's full completion validation and is never blindly retried.
+        """
+        check_cancelled()
+        body = dump_json(payload).encode("utf-8")
+        if len(body) > self._request_limit(payload):
+            raise ProviderError("This conversation exceeds the local request limit. Shorten it or remove images.")
+        client = self._client or httpx.Client(timeout=TIMEOUT, trust_env=False)
+        done = threading.Event()
+        watcher = None
+        context = CURRENT.get()
+        try:
+            with client.stream("POST", url, content=body, headers={
+                "Content-Type": "application/json", "Accept": "text/event-stream", **headers,
+            }, timeout=TIMEOUT, follow_redirects=False) as response:
+                self._check_status(response.status_code)
+                if context:
+                    def watch():
+                        while not done.wait(.1):
+                            if context.cancel.is_set() or time.monotonic() > context.deadline:
+                                try:
+                                    response.close()
+                                except Exception:
+                                    pass
+                                return
+                    watcher = threading.Thread(target=watch, name="jarvix-stream-cancel", daemon=True)
+                    watcher.start()
+                total = 0
+                buffer = b""
+                event_lines = []
+                json_response = "application/json" in response.headers.get("content-type", "").lower()
+                for chunk in response.iter_bytes():
+                    check_cancelled()
+                    total += len(chunk)
+                    if total > MAX_RESPONSE_BYTES:
+                        raise ProviderError("The AI response exceeded the local size limit. No tool was executed.")
+                    buffer += chunk
+                    if json_response:
+                        continue
+                    while b"\n" in buffer:
+                        raw, buffer = buffer.split(b"\n", 1)
+                        try:
+                            line = raw.rstrip(b"\r").decode("utf-8")
+                        except UnicodeError:
+                            raise ProviderError("The provider returned invalid stream encoding.") from None
+                        if line.startswith("data:"):
+                            event_lines.append(line[5:].lstrip(" "))
+                        elif not line and event_lines:
+                            value = "\n".join(event_lines)
+                            event_lines = []
+                            if value == "[DONE]":
+                                check_cancelled()
+                                return
+                            parsed = load_json(value)
+                            if not isinstance(parsed, dict):
+                                raise ProviderError("The provider returned a malformed stream event.")
+                            yield parsed
+                check_cancelled()
+                if json_response:
+                    parsed = load_json(buffer)
+                    if not isinstance(parsed, dict):
+                        raise ProviderError("The provider returned a malformed response.")
+                    yield parsed
+                elif buffer.strip() or event_lines:
+                    raise ProviderError("The provider stream ended before its final event. No tool was executed.")
+        except httpx.TimeoutException:
+            check_cancelled()
+            raise ProviderError("The AI provider timed out. The partial response was kept locally.") from None
+        except (httpx.HTTPError, OSError):
+            check_cancelled()
+            raise ProviderError("The AI provider connection was interrupted. The partial response was kept locally.") from None
+        finally:
+            done.set()
+            if watcher:
+                watcher.join(timeout=.3)
+            if self._client is None:
+                client.close()
+
+    @staticmethod
     def _check_status(status: int) -> None:
         if 200 <= status < 300:
             return
@@ -120,3 +216,4 @@ class Transport:
         else:
             message = "The AI provider could not complete this request. Check your provider configuration."
         raise ProviderError(message)
+

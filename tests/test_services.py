@@ -169,3 +169,4 @@ def test_windows_junctions_are_pruned_before_traversal(services, tmp_path, monke
         monkeypatch.setattr(os, "scandir", real_scandir)
         escape.rmdir()
         loop.rmdir()
+

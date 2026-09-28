@@ -1130,3 +1130,4 @@ class SettingsPage(Page):
             self.window.configure_overlay()
             self.window.pages["Chat"].reload_provider()
             self.window.notify("Settings saved locally.")
+

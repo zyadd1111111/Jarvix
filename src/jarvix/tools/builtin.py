@@ -232,3 +232,4 @@ def build_registry(services: Any) -> ToolRegistry:
     register("system.processes", "Show running processes using the most RAM. Does not expose command-line arguments.",
              _schema({"limit": {"type": "integer", "minimum": 1, "maximum": 30}}), processes, "system.read")
     return registry
+

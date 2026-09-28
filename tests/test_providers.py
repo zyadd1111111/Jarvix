@@ -295,3 +295,4 @@ def test_gemini_does_not_execute_calls_in_invalid_parts(extra):
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
         with pytest.raises(ProviderError):
             GeminiProvider(SECRET, client).complete([Message("user", "hi")], [SPEC], "test-model")
+

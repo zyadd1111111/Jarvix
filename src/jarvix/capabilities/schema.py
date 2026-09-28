@@ -32,3 +32,4 @@ def register(registry, name, description, properties, required, handler, level=1
         return value if isinstance(value, ToolResult) else ToolResult(True, value)
     registry.register(ToolSpec(name, description, schema(properties, required), permission,
                                risk or ("read" if level == 1 else "write"), level), run)
+

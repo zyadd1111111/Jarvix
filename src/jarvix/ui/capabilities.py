@@ -306,3 +306,4 @@ class CapabilityDialog(QDialog):
     def closeEvent(self, event):
         self.cancel()
         event.accept()
+

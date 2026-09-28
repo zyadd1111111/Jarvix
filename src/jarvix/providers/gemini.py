@@ -13,23 +13,70 @@ from jarvix.providers._transport import MAX_OUTPUT_TOKENS, MAX_TOOL_CALLS, Trans
 
 class GeminiProvider:
     id = "gemini"
+    supports_vision = True
 
     def __init__(self, api_key: str, client: httpx.Client | None = None) -> None:
         self._transport = Transport(api_key, client)
 
     def complete(self, messages: list[Message], tools: list[ToolSpec], model: str) -> Completion:
         model = validate_model(model)
-        names = name_map(tools)
+        data = self._transport.request(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+            self._request_payload(messages, tools), {"x-goog-api-key": self._transport._api_key},
+        )
+        return self._parse(data, tools, model)
+
+    def _request_payload(self, messages, tools):
         payload = self._payload(messages)
         payload["generationConfig"] = {"maxOutputTokens": MAX_OUTPUT_TOKENS, "candidateCount": 1}
         if tools:
             payload["tools"] = [{"functionDeclarations": [{
                 "name": wire_name(t.name), "description": t.description, "parametersJsonSchema": t.parameters,
             } for t in tools]}]
-        data = self._transport.request(
-            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
-            payload, {"x-goog-api-key": self._transport._api_key},
-        )
+        return payload
+
+    def stream(self, messages, tools, model, on_delta):
+        model = validate_model(model)
+        parts, usage, finish = [], {}, None
+        for event in self._transport.events(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:streamGenerateContent?alt=sse",
+            self._request_payload(messages, tools), {"x-goog-api-key": self._transport._api_key},
+        ):
+            try:
+                if event.get("promptFeedback", {}).get("blockReason"):
+                    raise ProviderError("Gemini declined to return this response under its content policy.")
+                if "error" in event:
+                    raise ValueError
+                if event.get("usageMetadata"):
+                    usage = event["usageMetadata"]
+                candidates = event.get("candidates", [])
+                if not isinstance(candidates, list) or len(candidates) > 1:
+                    raise ValueError
+                if not candidates:
+                    continue
+                candidate = candidates[0]
+                if candidate.get("index", 0) != 0 or finish is not None:
+                    raise ValueError
+                content = candidate.get("content", {})
+                if content.get("role", "model") != "model":
+                    raise ValueError
+                for part in content.get("parts", []):
+                    if not isinstance(part, dict):
+                        raise ValueError
+                    parts.append(deepcopy(part))
+                    if "text" in part and not part.get("thought"):
+                        if not isinstance(part["text"], str) or "functionCall" in part:
+                            raise ValueError
+                        on_delta(part["text"])
+                finish = candidate.get("finishReason")
+            except (KeyError, IndexError, TypeError, ValueError, AttributeError):
+                raise ProviderError("Gemini returned an unsupported stream. No tool was executed.") from None
+        return self._parse({"candidates": [{"finishReason": finish, "content": {
+            "role": "model", "parts": parts,
+        }}], "usageMetadata": usage}, tools, model)
+
+    def _parse(self, data, tools, model):
+        names = name_map(tools)
         try:
             if data.get("promptFeedback", {}).get("blockReason"):
                 raise ProviderError("Gemini declined to return this response under its content policy.")
@@ -133,7 +180,9 @@ class GeminiProvider:
                 if parts:
                     contents.append({"role": "model", "parts": parts})
             elif message.role == "user":
-                contents.append({"role": "user", "parts": [{"text": message.content}]})
+                contents.append({"role": "user", "parts": [{"text": message.content}, *[
+                    {"inlineData": {"mimeType": image.mime_type, "data": image.data_base64}}
+                    for image in message.images]]})
             else:
                 raise ProviderError("The conversation contains an unsupported message role.")
         if pending:
@@ -142,3 +191,4 @@ class GeminiProvider:
         if system:
             payload["systemInstruction"] = {"parts": system}
         return payload
+

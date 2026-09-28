@@ -140,3 +140,4 @@ def test_shutdown_prevents_new_sessions_and_disconnect_errors_are_sanitized(inte
     service.close()
     with pytest.raises(RuntimeError, match="closed"):
         service.connect("github", "private-token")
+
