@@ -32,5 +32,15 @@ pyz = PYZ(a.pure)
 exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name=app_name, debug=False,
           bootloader_ignore_signals=False, strip=False, upx=False, console=debug_console,
           icon=str(root / "src" / "jarvix" / "assets" / "jarvix.ico"))
-coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name=app_name)
-
+host = Analysis(
+    [str(root / "scripts" / "browser_host_entry.py")],
+    pathex=[str(root / "src")],
+    hiddenimports=["keyring.backends.Windows"],
+    # The stdio helper never loads UI, audio, image or cloud provider code.
+    excludes=["PySide6", "shiboken6", "sounddevice", "pypdf", "httpx"],
+)
+host_exe = EXE(PYZ(host.pure), host.scripts, [], exclude_binaries=True,
+               name="JarvixBrowserHost", debug=False, strip=False, upx=False, console=True)
+# Both executables share one runtime directory; common DLLs are collected once.
+coll = COLLECT(exe, host_exe, a.binaries, a.datas, host.binaries, host.datas,
+               strip=False, upx=False, name=app_name)

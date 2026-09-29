@@ -2,6 +2,16 @@
 
 All notable changes to Jarvix are documented in this file.
 
+## [0.5.0] - Intelligence - 2026-09-29
+
+- Cited, local PDF/Office/text extraction, bounded pagination, section/table search, extractive summaries/Q&A/comparison and project knowledge collections.
+- Dependency failure handling, reviewable recovery plans and preserved successful outputs with uncertain-write replay protection.
+- Permissioned cross-app plan templates, account briefings, scoped/provenance-aware memory and ephemeral conversation context.
+- Automation undo, inverse previews, partial rollback reporting and cancellable queued requests/HTTP body reads.
+- Browser form privacy, optional download inspection, page evidence, tab search and guarded duplicate cleanup.
+- Document/source UI, recovery editor, memory provenance and explicit connected-tab search in the command palette.
+- Portable build includes the native browser host and extension. Accounts, devices and paid-model calls still need live configuration/testing.
+
 ## [0.4.0] - Nexus - 2024-09-28
 
 ### Added
@@ -141,4 +151,3 @@ All notable changes to Jarvix are documented in this file.
 ---
 
 Version format: [major.minor.patch] - Codename - Date
-

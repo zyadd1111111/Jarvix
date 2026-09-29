@@ -21,4 +21,3 @@ Jarvix is a local application with opt-in cloud AI. It is not a sandbox for untr
 Before public distribution: code-sign desktop binaries, review dependency licenses and redistribution notices (including Qt/PySide6), maintain dependency/security updates, test on each supported OS and add a tested upgrade/backup procedure. Network-account connectors need scoped OAuth and separate consent before becoming available.
 
 Report issues privately to the project maintainer before publishing reproduction data containing local records or credentials. Do not attach your SQLite database, API keys or unredacted conversation history to public reports.
-
