@@ -201,4 +201,3 @@ def authorize(integration_id: str, client_id: str, *, client_secret="", write=Fa
         return token
     finally:
         server.server_close()
-

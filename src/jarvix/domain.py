@@ -66,6 +66,7 @@ class ProviderError(RuntimeError):
 class AIProvider(Protocol):
     id: str
     def complete(self, messages: list[Message], tools: list[ToolSpec], model: str) -> Completion: ...
+    def close(self) -> None: ...
 
 
 class StreamingProvider(AIProvider, Protocol):
@@ -97,4 +98,3 @@ class PermissionRequest:
 
 Approval = Callable[[PermissionRequest], bool]
 EventSink = Callable[[str, Json], None]
-

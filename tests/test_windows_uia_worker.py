@@ -65,4 +65,3 @@ def test_native_worker_is_killed_and_reaped_on_stop(monkeypatch, cause):
         run_native_script("# fixed", {}, checkpoint=checkpoint, timeout=0.1 if cause == "timeout" else 12)
     assert worker.killed
     assert worker.inputs[-1] is None  # Reaped through communicate after termination.
-

@@ -5,9 +5,10 @@ import json
 import threading
 
 from PySide6.QtCore import QObject, QThread, QTimer, Qt, Signal, Slot
+from PySide6.QtGui import QColor, QPen, QBrush
 from PySide6.QtWidgets import (
     QApplication, QDialog, QHBoxLayout, QListWidget, QListWidgetItem,
-    QPlainTextEdit, QSplitter, QVBoxLayout, QWidget,
+    QPlainTextEdit, QSplitter, QVBoxLayout, QWidget, QProgressBar, QGraphicsScene, QGraphicsView,
 )
 
 from .chat import PermissionDialog
@@ -77,14 +78,24 @@ class OperatorDialog(QDialog):
         body.addWidget(self.goal)
         self.status = label("Ask Jarvix to plan a task or open a saved session.", "Muted", True)
         body.addWidget(self.status)
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 100)
+        self.progress.setAccessibleName("Operator progress")
+        body.addWidget(self.progress)
         self.steps = QListWidget()
         self.steps.itemDoubleClicked.connect(lambda _item: self.details())
         body.addWidget(self.steps, 1)
+        self.graph_view = QGraphicsView()
+        self.graph_view.setAccessibleName("Operator dependency graph")
+        self.graph_view.setMinimumHeight(180)
+        self.graph_view.hide()
+        body.addWidget(self.graph_view, 1)
         controls = QHBoxLayout()
         self.pause_button = button("Pause", self.pause)
         self.resume_button = button("Resume", self.resume)
         self.cancel_button = button("Cancel", self.cancel_session, "Danger")
         self.retry_button = button("Retry failed step", self.retry)
+        self.replan_button = button("Edit recovery plan", self.replan)
         self.undo_button = button("Undo selected", self.undo)
         for control in (self.pause_button, self.resume_button, self.cancel_button,
                         self.retry_button, self.undo_button):
@@ -94,6 +105,9 @@ class OperatorDialog(QDialog):
         row = QHBoxLayout()
         row.addWidget(button("View details", self.details, "Quiet"))
         row.addWidget(button("View permissions", self.permissions, "Quiet"))
+        row.addWidget(self.replan_button)
+        row.addWidget(button("Dependency graph", self.toggle_graph, "Quiet"))
+        row.addWidget(button("Send to background", self.handoff, "Quiet"))
         row.addStretch()
         body.addLayout(row)
         split.addWidget(detail)
@@ -170,6 +184,11 @@ class OperatorDialog(QDialog):
             steps = row.get("steps", [])
             done = sum(step.get("status") in {"completed", "complete", "succeeded"} for step in steps)
             self.status.setText(f"{state.replace('_', ' ').capitalize()} · {done}/{len(steps)} steps completed")
+            self.progress.setValue(int(row.get("progress_percent", 100 * done / max(1, len(steps)))))
+            if self.graph_view.isVisible():
+                self.render_graph(row)
+            if row.get("partial_completion"):
+                self.status.setText(self.status.text() + " · partial results retained")
             for index, step in enumerate(steps, 1):
                 status = step.get("status", "pending")
                 symbol = "✓" if status in {"completed", "complete", "succeeded"} else "!" if status == "failed" else "○"
@@ -178,6 +197,8 @@ class OperatorDialog(QDialog):
                     text += " · verified" if step.get("verified") else " · outcome not independently verified"
                 if step.get("error"):
                     text += " · " + str(step["error"])
+                if step.get("recovery"):
+                    text += "\n     " + str(step["recovery"])
                 item = QListWidgetItem(text)
                 item.setData(Qt.ItemDataRole.UserRole, step)
                 self.steps.addItem(item)
@@ -193,13 +214,57 @@ class OperatorDialog(QDialog):
                                      and not any(step.get("retry_safe") is False
                                                  for step in (row.get("steps", []) if row else [])
                                                  if step.get("status") not in {"complete", "completed", "succeeded"}))
+        self.replan_button.setEnabled(state in {"failed", "partial", "cancelled", "timed_out", "interrupted"}
+                                      and self.worker is None and not row.get("retry_session_id"))
         self.selection_changed()
+
+    def toggle_graph(self):
+        show = self.graph_view.isHidden()
+        self.graph_view.setVisible(show)
+        self.steps.setVisible(not show)
+        if show and (row := self.record()):
+            self.render_graph(row)
+
+    def render_graph(self, row):
+        from jarvix.capabilities.operator_graph import graph
+        value = graph({"steps": row.get("steps", [])}, row.get("retained_step_ids", []))
+        scene = QGraphicsScene(self.graph_view)
+        positions, counts = {}, {}
+        pen = QPen(QColor("#60869f"))
+        for node in value["nodes"]:
+            rank = node["rank"]
+            offset = counts.get(rank, 0)
+            counts[rank] = offset + 1
+            positions[node["id"]] = (rank * 210, offset * 90)
+        for edge in value["edges"]:
+            if edge["from"] in positions and edge["to"] in positions:
+                x1, y1 = positions[edge["from"]]
+                x2, y2 = positions[edge["to"]]
+                scene.addLine(x1 + 185, y1 + 28, x2, y2 + 28, pen)
+                scene.addLine(x2 - 7, y2 + 23, x2, y2 + 28, pen)
+                scene.addLine(x2 - 7, y2 + 33, x2, y2 + 28, pen)
+        for node in value["nodes"]:
+            x, y = positions[node["id"]]
+            scene.addRect(x, y, 185, 57, pen, QBrush(QColor("#142231")))
+            text = scene.addText(node["id"][:24] + "\n" + node["tool"][:24])
+            text.setDefaultTextColor(QColor("#d7eaf6"))
+            text.setPos(x + 5, y + 3)
+            text.setToolTip(node["id"] + " · " + node["tool"])
+        old = self.graph_view.scene()
+        self.graph_view.setScene(scene)
+        if old:
+            old.deleteLater()
+
+    def handoff(self):
+        if self.session_id:
+            self.window.open_capabilities("execution.handoff", {"id": self.session_id, "background": True})
+            self.refresh()
 
     def selection_changed(self, *_):
         item = self.steps.currentItem()
         step = item.data(Qt.ItemDataRole.UserRole) if item else {}
         row = self.record()
-        stopped = row and row.get("status") in {"complete", "completed", "failed", "cancelled", "timed_out", "denied", "interrupted"}
+        stopped = row and row.get("status") in {"complete", "completed", "partial", "partial_failure", "failed", "cancelled", "timed_out", "denied", "interrupted"}
         self.undo_button.setEnabled(bool(stopped and step.get("undo_id")) and not step.get("undone") and self.worker is None)
 
     def pause(self):
@@ -272,15 +337,27 @@ class OperatorDialog(QDialog):
         self.window.release_job(worker)
         self.refresh()
 
-    def edit_plan(self):
+    def replan(self):
+        if self.session_id:
+            self.edit_plan(recovery_id=self.session_id)
+
+    def edit_plan(self, recovery_id=None):
         dialog = QDialog(self)
-        dialog.setWindowTitle("Run a structured operator plan")
+        dialog.setWindowTitle("Edit recovery plan" if recovery_id else "Run a structured operator plan")
         dialog.resize(710, 530)
         layout = QVBoxLayout(dialog)
         layout.addWidget(label("Review the ordered tools and arguments before execution.", "Muted", True))
         editor = QPlainTextEdit()
-        editor.setPlainText(json.dumps({"goal": "Review today's tasks", "steps": [
-            {"id": "tasks", "tool": "tasks.list", "arguments": {}}], "timeout_seconds": 120}, indent=2))
+        plan = {"goal": "Review today's tasks", "steps": [
+            {"id": "tasks", "tool": "tasks.list", "arguments": {}}], "timeout_seconds": 120}
+        if recovery_id:
+            session = self.services.operator.get(recovery_id)
+            retained = [step["id"] for step in session.get("steps", [])
+                        if step.get("status") == "complete" and not step.get("undone")]
+            layout.addWidget(label("Completed steps retained: " + (", ".join(retained) or "none")
+                                   + ". Add only new steps; inspect uncertain targets before changing them.", "Muted", True))
+            plan.update(goal=session["goal"], steps=[])
+        editor.setPlainText(json.dumps(plan, indent=2))
         layout.addWidget(editor)
         error = label("", "Muted", True)
         layout.addWidget(error)
@@ -290,11 +367,16 @@ class OperatorDialog(QDialog):
                 plan = json.loads(editor.toPlainText())
                 if not isinstance(plan, dict):
                     raise ValueError("A plan must be a JSON object.")
+                if recovery_id:
+                    self.services.operator.preview_replan(recovery_id, plan)
+                else:
+                    self.services.operator.preview(plan)
             except (ValueError, TypeError) as exc:
                 error.setText(str(exc))
                 return
             dialog.accept()
-            self.start(lambda **kwargs: self.services.operator.run(plan, **kwargs))
+            self.start(lambda **kwargs: self.services.operator.replan(recovery_id, plan, **kwargs)
+                       if recovery_id else self.services.operator.run(plan, **kwargs))
 
         row = QHBoxLayout()
         row.addStretch()
@@ -419,4 +501,3 @@ class DesktopIndicator(QObject):
                                  (self.hud.isVisible() and QApplication.platformName() not in {"offscreen", "minimal"}))
         finally:
             bridge["ready"].set()
-

@@ -69,4 +69,3 @@ def setup(s, registry):
     register(registry, "notifications.clear", "Remove local notification history.", {"read_only": BOOL}, (), service.clear, 3)
     register(registry, "notifications.preferences", "Set quiet mode and do-not-disturb.",
              {"quiet": BOOL, "do_not_disturb": BOOL}, (), service.preferences, 2)
-

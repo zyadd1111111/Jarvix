@@ -1,0 +1,14 @@
+{
+  "id": "daily_focus",
+  "name": "Daily Focus",
+  "version": "1.0.0",
+  "sdk_version": 1,
+  "permissions": ["tasks.read", "system.read"],
+  "capabilities": ["tools", "services", "panels", "commands", "triggers", "actions"],
+  "tools": [{"name": "tasks", "target": "tasks.list", "title": "Review unfinished tasks"}],
+  "services": [{"name": "health", "target": "system.status"}],
+  "panels": [{"name": "tasks", "target": "tasks.list", "title": "Daily tasks"}],
+  "commands": [{"name": "review_tasks", "target": "tasks.list", "title": "Daily Focus: review tasks"}],
+  "triggers": [{"name": "startup", "target": "jarvix_start", "title": "Daily Focus startup"}],
+  "actions": [{"name": "review_tasks", "target": "tasks.list"}]
+}

@@ -7,6 +7,7 @@ from itertools import islice
 import psutil
 
 from jarvix.runtime import check_cancelled
+from jarvix.capabilities.workflow_values import resolve
 
 
 def clock_time(value):
@@ -54,6 +55,7 @@ class ConditionEvaluator:
         "time_range": {"start", "end"}, "weekday": {"days"}, "battery": {"charging", "below"},
         "network": {"connected"}, "task": {"id", "status"}, "workspace": {"id"},
         "safe": {"key", "op", "value"},
+        "result": {"ref", "op", "value"},
     }
 
     def __init__(self, services):
@@ -102,12 +104,37 @@ class ConditionEvaluator:
                 raise ValueError("Choose a supported comparison.")
             if type(condition.get("value")) not in {int, float} or not 0 <= condition["value"] <= 100:
                 raise ValueError("Comparison value must be from 0 to 100.")
+        elif kind == "result":
+            if not isinstance(condition.get("ref"), str) or not 1 <= len(condition["ref"]) <= 500:
+                raise ValueError("Choose a bounded workflow result reference.")
+            if condition.get("op") not in {"eq", "ne", "contains", "exists", "lt", "le", "gt", "ge"}:
+                raise ValueError("Choose a supported result comparison.")
+            if condition["op"] != "exists" and "value" not in condition:
+                raise ValueError("Result comparison needs a value.")
         return dict(condition)
 
-    def evaluate(self, condition, now=None):
+    def evaluate(self, condition, now=None, values=None):
         check_cancelled()
         c = self.validate(condition)
         kind = c["kind"]
+        if kind == "result":
+            try:
+                actual = resolve({"$ref": c["ref"]}, values or {})
+            except (KeyError, IndexError, ValueError):
+                return False
+            op, expected = c["op"], c.get("value")
+            if op == "exists":
+                return actual is not None
+            if op in {"eq", "ne"}:
+                equal = type(actual) is type(expected) and actual == expected
+                return equal if op == "eq" else not equal
+            if op == "contains":
+                return isinstance(actual, (str, list, dict)) and (not isinstance(actual, (str, dict))
+                    or isinstance(expected, str)) and expected in actual
+            if type(actual) not in {int, float} or type(expected) not in {int, float}:
+                return False
+            return {"lt": actual < expected, "le": actual <= expected,
+                    "gt": actual > expected, "ge": actual >= expected}[op]
         local = (now or datetime.now().astimezone()).astimezone()
         if kind in {"app_running", "process"}:
             return (c["name"].casefold() in process_names()) == c.get("running", True)
@@ -140,4 +167,3 @@ class ConditionEvaluator:
         expected = c["value"]
         return {"lt": actual < expected, "le": actual <= expected, "eq": actual == expected,
                 "ge": actual >= expected, "gt": actual > expected}[c["op"]]
-

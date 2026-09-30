@@ -5,7 +5,7 @@ import contextvars
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
-from threading import Event
+from threading import Event, Thread
 
 from jarvix.domain import Approval, EventSink
 from typing import Callable
@@ -44,6 +44,50 @@ def consume_step():
 
 
 @contextmanager
+def cancellable_lock(lock):
+    """Do not strand a stopped operation behind another browser/account request."""
+    check_cancelled()
+    while not lock.acquire(timeout=.05):
+        check_cancelled()
+    try:
+        check_cancelled()
+        yield
+    finally:
+        lock.release()
+
+
+@contextmanager
+def cancel_response(response):
+    """Close a live HTTP response when cancelled, including a stalled body read.
+
+    Does not close injected/shared clients. Connection establishment remains
+    bounded by the transport timeout; cancellation never retries a mutation.
+    """
+    context = CURRENT.get()
+    done = Event()
+    watcher = None
+    if context:
+        def watch():
+            while not done.wait(.05):
+                if context.cancel.is_set() or time.monotonic() > context.deadline:
+                    try:
+                        response.close()
+                    except Exception:
+                        pass
+                    return
+        watcher = Thread(target=watch, name="jarvix-http-cancel", daemon=True)
+        watcher.start()
+    try:
+        check_cancelled()
+        yield response
+        check_cancelled()
+    finally:
+        done.set()
+        if watcher:
+            watcher.join(timeout=.3)
+
+
+@contextmanager
 def operation(cancel=None, approve=None, timeout=120, max_steps=32, unattended=False,
               on_event=None, checkpoint=None):
     previous = CURRENT.get()
@@ -62,7 +106,7 @@ def operation(cancel=None, approve=None, timeout=120, max_steps=32, unattended=F
             previous.unattended = previous_unattended
             previous.on_event, previous.checkpoint = previous_event, previous_checkpoint
         return
-    timeout = max(1, min(float(timeout), 600))
+    timeout = max(1, min(float(timeout), 3600))
     context = ExecutionContext(cancel or Event(), approve or (lambda _: False),
                                time.monotonic() + timeout, max(1, min(int(max_steps), 64)), unattended)
     context.on_event, context.checkpoint = on_event, checkpoint
@@ -72,4 +116,3 @@ def operation(cancel=None, approve=None, timeout=120, max_steps=32, unattended=F
         yield context
     finally:
         CURRENT.reset(token)
-

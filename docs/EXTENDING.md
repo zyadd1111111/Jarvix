@@ -25,4 +25,3 @@ Build a service adapter and register narrowly scoped tools. Add OAuth consent, t
 ## Voice
 
 `voice.py` owns local playback; `speech_input.py` captures opt-in microphone audio and transcribes locally through Windows System.Speech. Keep status and cancellation visible, remove temporary audio, and leave transcripts as editable drafts. Continuous dictation requires a per-session opt-in. Wake-word listening is not implemented.
-

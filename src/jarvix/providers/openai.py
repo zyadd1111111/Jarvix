@@ -14,15 +14,22 @@ from jarvix.providers._transport import (
 class OpenAIProvider:
     id = "openai"
     supports_vision = True
+    supports_tools = True
+    is_local = False
+    _completion_url = "https://api.openai.com/v1/chat/completions"
+    _validate_model = staticmethod(validate_model)
 
     def __init__(self, api_key: str, client: httpx.Client | None = None) -> None:
         self._transport = Transport(api_key, client)
+        self._headers = {"Authorization": f"Bearer {self._transport._api_key}"}
+
+    def close(self) -> None:
+        """Transport closes each owned request; injected clients remain caller-owned."""
 
     def complete(self, messages: list[Message], tools: list[ToolSpec], model: str) -> Completion:
-        model = validate_model(model)
+        model = self._validate_model(model)
         data = self._transport.request(
-            "https://api.openai.com/v1/chat/completions", self._payload(messages, tools, model),
-            {"Authorization": f"Bearer {self._transport._api_key}"},
+            self._completion_url, self._payload(messages, tools, model), self._headers,
         )
         return self._parse(data, tools, model)
 
@@ -40,12 +47,11 @@ class OpenAIProvider:
         return payload
 
     def stream(self, messages, tools, model, on_delta):
-        model = validate_model(model)
+        model = self._validate_model(model)
         payload = self._payload(messages, tools, model)
         payload.update(stream=True, stream_options={"include_usage": True})
         text, refusal, calls, usage, finish = "", "", {}, {}, None
-        for event in self._transport.events("https://api.openai.com/v1/chat/completions", payload,
-                                           {"Authorization": f"Bearer {self._transport._api_key}"}):
+        for event in self._transport.events(self._completion_url, payload, self._headers):
             try:
                 choices = event.get("choices", [])
                 if not isinstance(choices, list) or len(choices) > 1 or "error" in event:
@@ -168,4 +174,3 @@ class OpenAIProvider:
                 raise ProviderError("The conversation contains an unmatched tool result. Start a new conversation.")
             value["tool_call_id"] = message.tool_call_id
         return value
-

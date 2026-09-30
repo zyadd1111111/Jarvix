@@ -124,4 +124,3 @@ def setup(s, registry):
         return {"exported": True, "path": str(target), "credentials_included": False}
     register(registry, "data.export", "Export local notes, tasks, memories, projects and conversations; excludes credentials.",
              {"path": string()}, ("path",), export_data, 3)
-

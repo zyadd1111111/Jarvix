@@ -15,13 +15,14 @@ from PySide6.QtWidgets import (
 )
 
 from .theme import STYLESHEET, configure_fonts
-from .widgets import label, button, Job, SignalOrb, TextPreview
+from .widgets import label, button, Job, SignalOrb, TextPreview, ApprovalBridge
 from .pages import (
     HomePage, NotesPage, MemoryPage, TasksPage, FilesPage, AppsPage, SystemPage,
-    ActivityPage, IntegrationsPage, VoicePage, AutomationsPage, SettingsPage,
+    ActivityPage, VoicePage, AutomationsPage, SettingsPage,
 )
-from .chat import ChatPage
-from .capabilities import CapabilityDialog
+from .integrations import IntegrationsPage
+from .chat import ChatPage, PermissionDialog
+from .capabilities import CapabilityDialog, ToolJob
 from .operator import DesktopIndicator, OperatorDialog, ServiceJob
 from .overlay import CommandOverlay, GlobalHotkey, WorkflowHotkeys
 
@@ -36,12 +37,16 @@ NAVIGATION = [
 
 class RuntimeSignals(QObject):
     event = Signal(str, object)
+    approval = Signal(object)
+    dismiss_approval = Signal(object)
 
 
 class CommandPalette(QDialog):
     def __init__(self, window):
         super().__init__(window)
         self.window = window
+        self.browser_worker = None
+        self.pending_dialog = None
         self.setWindowTitle("Jarvix · Command palette")
         self.resize(700, 470)
         layout = QVBoxLayout(self)
@@ -49,7 +54,7 @@ class CommandPalette(QDialog):
         layout.setSpacing(12)
         layout.addWidget(label("COMMAND CENTER", "Eyebrow"))
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Search commands, notes, tasks, files, applications, and tools…")
+        self.search.setPlaceholderText("Search locally or describe what you want to do…")
         self.search.setMinimumHeight(43)
         self.search.textChanged.connect(self.search_entries)
         self.search.returnPressed.connect(self.execute)
@@ -57,7 +62,14 @@ class CommandPalette(QDialog):
         self.results = QListWidget()
         self.results.itemActivated.connect(self.execute)
         layout.addWidget(self.results)
-        layout.addWidget(label("↑ ↓ to explore    Enter to open    Esc to dismiss    ·    Search stays local", "Muted"))
+        browser_row = QHBoxLayout()
+        self.browser_button = button("Include connected browser tabs", self.load_tabs, "Quiet")
+        browser_row.addWidget(self.browser_button)
+        browser_row.addStretch()
+        browser_row.addWidget(button("Draft in Chat", self.draft, "Quiet"))
+        layout.addLayout(browser_row)
+        self.status = label("↑ ↓ to explore    Enter to open    Esc to dismiss    ·    Search stays local", "Muted", True)
+        layout.addWidget(self.status)
         self.entries = self.build_entries()
         self.search_entries("")
 
@@ -77,6 +89,10 @@ class CommandPalette(QDialog):
             ("Tool permissions and capabilities", "Settings", lambda: window.navigate("Settings")),
             ("Local actions", "Command", window.open_capabilities),
             ("Operator sessions", "Command", window.open_operator),
+            ("Knowledge spaces", "Knowledge", lambda: window.open_adaptive("Knowledge")),
+            ("Semantic search", "Search", window.open_adaptive),
+            ("Local models and routing", "Settings", lambda: window.open_adaptive("Models")),
+            ("Extension manager", "Settings", lambda: window.open_adaptive("Extensions")),
             ("Quick command overlay", "Command", window.open_overlay),
             ("Build a workflow", "Automation", window.open_workflow_builder),
             ("Manage workspaces", "Command", window.open_workspaces),
@@ -85,6 +101,12 @@ class CommandPalette(QDialog):
         ])
         for note in services.list_notes():
             entries.append((note["title"], "Note", lambda record=note: window.open_note(record["id"])))
+        for conversation in services.list_conversations():
+            entries.append((conversation["title"], "Conversation",
+                            lambda record=conversation: window.open_conversation(record["id"])))
+        for integration in services.integrations.status():
+            entries.append((integration["name"] + " · " + integration["status"], "Integration",
+                            lambda: window.navigate("Integrations")))
         for app in services.list_apps():
             entries.append((app["name"], "Application", lambda record=app: window.open_capabilities("apps.open", {"id": record["id"]})))
         for project in services.list_projects():
@@ -101,18 +123,74 @@ class CommandPalette(QDialog):
             for workflow in services.workflows.list():
                 entries.append((workflow["name"], "Routine" if workflow.get("kind") == "routine" else "Workflow",
                                 lambda record=workflow: window.open_capabilities("workflows.run", {"id": record["id"]})))
-        tool_names = {spec.name for spec in services.registry.specs()}
+        specs = services.registry.specs()
+        tool_names = {spec.name for spec in specs}
         for name in services.settings.get("commands.favorites", []):
             if name in tool_names:
                 entries.append((name, "Favorite command", lambda tool=name: window.open_capabilities(tool)))
         for name in services.settings.get("commands.recent", []):
             if name in tool_names:
                 entries.append((name, "Recent command", lambda tool=name: window.open_capabilities(tool)))
-        for spec in services.registry.specs():
+        for spec in specs:
             entries.append((spec.name + " · " + spec.description, "Tool", lambda tool=spec: window.open_capabilities(tool.name)))
         for activity in services.activity(10):
             entries.append((activity.get("summary", "Recent action"), "Recent action", lambda: window.navigate("Activity")))
+        for command in services.plugins.contributions("commands"):
+            entries.append((command.get("title", command["name"]), "Extension command",
+                            lambda item=command: window.open_capabilities(item["target"])))
         return entries
+
+    def draft(self):
+        text = self.search.text().strip()
+        if text:
+            self.accept()
+            self.window.open_chat(text, send=False)
+
+    def load_tabs(self):
+        if self.browser_worker:
+            return
+        self.browser_worker = ToolJob(self.window.services, "browser.tabs", {}, self.window)
+        self.window.jobs.add(self.browser_worker)
+        self.browser_worker.approval.connect(self.approve_tabs)
+        self.browser_worker.succeeded.connect(self.tabs_loaded)
+        self.browser_worker.failed.connect(self.status.setText)
+        self.browser_worker.finished.connect(self.tabs_finished)
+        self.browser_button.setEnabled(False)
+        self.status.setText("Reading explicitly connected tabs…")
+        self.browser_worker.start()
+
+    def approve_tabs(self, bridge):
+        try:
+            if not self.browser_worker or self.browser_worker.cancel.is_set() or self.window.closing:
+                return
+            self.pending_dialog = PermissionDialog(bridge.request, self)
+            bridge.answer = self.pending_dialog.exec() == QDialog.DialogCode.Accepted
+        finally:
+            self.pending_dialog = None
+            bridge.ready.set()
+
+    def tabs_loaded(self, result):
+        if not result.ok:
+            self.status.setText(result.error or "Browser is not connected.")
+            return
+        self.entries = [item for item in self.entries if item[1] != "Browser tab"]
+        for tab in result.data.get("items", []):
+            self.entries.append((tab["title"] + " · " + tab["url"], "Browser tab",
+                                 lambda record=tab: self.window.open_capabilities("browser.tab_switch", {"tab_id": record["id"]})))
+        self.search_entries(self.search.text())
+        self.status.setText("Tab titles and sanitized URLs loaded locally for this search only.")
+
+    def tabs_finished(self):
+        worker, self.browser_worker = self.browser_worker, None
+        self.window.release_job(worker)
+        self.browser_button.setEnabled(True)
+
+    def done(self, result):
+        if self.browser_worker:
+            self.browser_worker.cancel.set()
+        if self.pending_dialog:
+            self.pending_dialog.reject()
+        super().done(result)
 
     def search_entries(self, text):
         self.results.clear()
@@ -121,6 +199,12 @@ class CommandPalette(QDialog):
         for title, category, action in self.entries:
             candidate = (title + " " + category).casefold()
             score = 2 if all(word in candidate for word in query) else 0
+            if query and " ".join(query) == title.casefold():
+                score = 5
+            elif query and title.casefold().startswith(" ".join(query)):
+                score = 4
+            elif query and all(word in title.casefold() for word in query):
+                score = 3
             if not score and query:
                 words = candidate.replace(".", " ").replace("_", " ").split()
                 if all(len(word) > 2 and any(SequenceMatcher(None, word, other).ratio() >= .8
@@ -135,6 +219,11 @@ class CommandPalette(QDialog):
             if self.results.count() >= 80:
                 break
         if self.results.count():
+            self.results.setCurrentRow(0)
+        elif text.strip():
+            item = QListWidgetItem("Ask Jarvix: " + text + "\nDraft in Chat · review before sending")
+            item.setData(Qt.ItemDataRole.UserRole, self.draft)
+            self.results.addItem(item)
             self.results.setCurrentRow(0)
 
     def keyPressEvent(self, event):
@@ -167,6 +256,7 @@ class MainWindow(QMainWindow):
         self.capability_dialog = None
         self.operator_dialog = None
         self.workflow_dialogs = []
+        self.supervised_dialogs = []
         self.workspace_dialog = None
         self.hotkey_jobs = {}
         self.tray = None
@@ -215,7 +305,7 @@ class MainWindow(QMainWindow):
         side.addSpacing(10)
         side.addWidget(label("●  LOCAL-FIRST", "Success"))
         side.addWidget(label("Your data. Your decisions.", "Muted"))
-        side.addWidget(label("OPERATOR  /  0.4", "Eyebrow"))
+        side.addWidget(label("ADAPTIVE  /  0.6", "Eyebrow"))
         main.addWidget(sidebar)
         workspace = QWidget()
         workspace_layout = QVBoxLayout(workspace)
@@ -240,6 +330,7 @@ class MainWindow(QMainWindow):
         top.addSpacing(19)
         top.addWidget(button("Actions", self.open_capabilities))
         top.addWidget(button("Operator", self.open_operator))
+        top.addWidget(button("Knowledge", self.open_adaptive, "Quiet"))
         top.addWidget(button("Inbox", self.open_notifications, "Quiet"))
         top.addWidget(button("Search anything    Ctrl K", self.open_palette))
         workspace_layout.addWidget(topbar)
@@ -258,7 +349,11 @@ class MainWindow(QMainWindow):
             self.pages[name] = page
             self.stack.addWidget(page)
         status = self.statusBar()
-        status.setStyleSheet("QStatusBar { background:#0b0f15; border-top:1px solid #222a37; color:#8291aa; padding:3px 12px; font-size:11px; }")
+        status.setStyleSheet(
+            "QStatusBar { background: rgba(7, 12, 20, 245); "
+            "border-top: 1px solid rgba(174, 212, 255, 32); "
+            "color: #8299b4; padding: 4px 12px; font-size: 11px; }"
+        )
         status.setSizeGripEnabled(False)
         self.provider_label = label("", "Muted")
         status.addPermanentWidget(self.provider_label)
@@ -299,6 +394,10 @@ class MainWindow(QMainWindow):
         self.hotkey_timer.start()
         self.runtime_signals = RuntimeSignals(self)
         self.runtime_signals.event.connect(self.runtime_event)
+        self.runtime_signals.approval.connect(self.supervised_permission)
+        self.runtime_signals.dismiss_approval.connect(self.dismiss_supervised_permission)
+        if hasattr(self.services, "supervisor"):
+            self.services.supervisor.set_approval_handler(self.supervised_approval)
         if hasattr(self.services, "operator"):
             self.services.operator.set_callback(self.runtime_signals.event.emit)
         self.update_clock()
@@ -321,12 +420,55 @@ class MainWindow(QMainWindow):
     def update_clock(self):
         self.clock_label.setText(datetime.now().strftime("%a, %b %d   %I:%M %p"))
 
+    def supervised_approval(self, request, cancel):
+        if self.closing or cancel.is_set():
+            return False
+        bridge = ApprovalBridge(request)
+        self.runtime_signals.approval.emit(bridge)
+        try:
+            from jarvix.runtime import check_cancelled
+            while not bridge.ready.wait(.1):
+                check_cancelled()
+                if self.closing or cancel.is_set():
+                    return False
+            check_cancelled()
+            return bridge.answer and not self.closing and not cancel.is_set()
+        finally:
+            if not bridge.ready.is_set():
+                self.runtime_signals.dismiss_approval.emit(bridge)
+
+    def supervised_permission(self, bridge):
+        dialog = None
+        try:
+            if self.closing:
+                return
+            dialog = PermissionDialog(bridge.request, self)
+            dialog.supervised_bridge = bridge
+            self.supervised_dialogs.append(dialog)
+            bridge.answer = dialog.exec() == QDialog.DialogCode.Accepted and not self.closing
+        finally:
+            if dialog:
+                self.supervised_dialogs.remove(dialog)
+                dialog.deleteLater()
+            bridge.ready.set()
+
+    def dismiss_supervised_permission(self, bridge):
+        for dialog in self.supervised_dialogs:
+            if dialog.supervised_bridge is bridge:
+                dialog.reject()
+
     def update_status(self):
         if not hasattr(self, "provider_label"):
             return
         provider = self.services.settings.get("provider", "openai")
         configured = self.services.provider_status().get(provider, False)
-        self.provider_label.setText(f"{'OpenAI' if provider == 'openai' else 'Gemini'}  ·  {'Key configured' if configured else 'Setup required'}")
+        names = {"openai": "OpenAI · cloud", "gemini": "Gemini · cloud", "ollama": "Ollama · local",
+                 "local": "Local endpoint", "auto": "Automatic routing"}
+        self.provider_label.setText(f"{names.get(provider, provider)} · {'Configured' if configured else 'Setup required'}")
+
+    def open_adaptive(self, tab="Search"):
+        from .adaptive import AdaptiveDialog
+        AdaptiveDialog(self, tab).exec()
 
     def navigate(self, name, record_history=True):
         if self.closing:
@@ -506,6 +648,7 @@ class MainWindow(QMainWindow):
         menu.addAction("Open Jarvix", self.restore_window)
         menu.addAction("Local actions", lambda: (self.restore_window(), self.open_capabilities()))
         menu.addAction("Operator sessions", lambda: (self.restore_window(), self.open_operator()))
+        menu.addAction("Knowledge & local models", lambda: (self.restore_window(), self.open_adaptive()))
         menu.addAction("Quick command", self.open_overlay)
         menu.addAction("Tasks", lambda: (self.restore_window(), self.navigate("Tasks")))
         menu.addAction("Notifications", lambda: (self.restore_window(), self.open_notifications()))
@@ -513,6 +656,7 @@ class MainWindow(QMainWindow):
         menu.addSeparator()
         menu.addAction("Quit Jarvix", self.quit_application)
         self.tray.setContextMenu(menu)
+        self.tray.messageClicked.connect(lambda: (self.restore_window(), self.open_notifications()))
         self.tray.activated.connect(lambda reason: self.restore_window()
                                    if reason in (QSystemTrayIcon.ActivationReason.Trigger,
                                                  QSystemTrayIcon.ActivationReason.DoubleClick) else None)
@@ -639,6 +783,8 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         self.closing = True
+        for dialog in list(self.supervised_dialogs):
+            dialog.reject()
         self.global_hotkey.close()
         self.workflow_hotkeys.close()
         self.hotkey_timer.stop()
@@ -662,6 +808,7 @@ class MainWindow(QMainWindow):
             timer.stop()
         self.pages["Chat"].cancel()
         self.pages["Voice"].input_panel.shutdown()
+        self.pages["Integrations"].cancel_connections()
         self.guard(self.services.stop_speaking)
         background_running = hasattr(self.services, "background") and self.services.background.running
         if self.jobs or self.pages["Chat"].busy or background_running:
@@ -674,4 +821,3 @@ class MainWindow(QMainWindow):
         if self.tray:
             self.tray.hide()
         event.accept()
-

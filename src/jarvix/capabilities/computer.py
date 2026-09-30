@@ -421,4 +421,3 @@ def setup(services, registry):
          level=2, permission="screen.capture")
     tool("screen.history", "List saved local screenshots; no new capture.", screenshots.history,
          {"limit": integer(1, 100)}, permission="screen.capture")
-

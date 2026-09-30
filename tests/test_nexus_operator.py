@@ -87,4 +87,3 @@ def test_checkpoint_tampering_and_uncertain_mutation_cannot_replay(services, mon
     with pytest.raises(ValueError, match="new plan"):
         restored.retry(result["id"], approve=lambda _: True)
     assert len(services.list_notes()) == 1
-

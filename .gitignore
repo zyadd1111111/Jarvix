@@ -13,4 +13,3 @@ dist/
 *.db-shm
 *.db-wal
 artifacts/
-

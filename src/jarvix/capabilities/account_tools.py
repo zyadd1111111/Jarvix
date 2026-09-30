@@ -155,4 +155,3 @@ def register_accounts(s, registry):
         {"channel_id": IDENTIFIER, "limit": LIMIT}, ("channel_id",))
     add("discord.send", "POST MESSAGE as the connected Discord bot; confirm the channel and exact text. Mentions are disabled.",
         {"channel_id": IDENTIFIER, "text": string(2000)}, ("channel_id", "text"), level=3, write=True)
-

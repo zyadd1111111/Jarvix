@@ -25,4 +25,3 @@ def test_real_uia_controls_capture_ocr_and_stale_identity_rejection():
     assert report["success"] and report["control_actions"] and report["stale_identity"]
     assert report["window_capture"] and report["ocr"]["test_text_found"]
     assert report["ocr"]["external_upload"] is False
-

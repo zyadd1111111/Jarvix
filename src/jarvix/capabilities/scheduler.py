@@ -232,4 +232,3 @@ def setup(s, registry):
     register(registry, "scheduler.list", "List Jarvix's opted-in Windows schedules and last execution status.", {}, (), service.list)
     register(registry, "scheduler.remove", "Revoke and remove a Jarvix Windows scheduled task.",
              {"id": ID}, ("id",), service.remove, 3, "scheduler.manage")
-

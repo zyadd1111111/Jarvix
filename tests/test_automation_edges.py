@@ -160,4 +160,3 @@ def test_notification_delivery_prioritizes_high_without_dropping_low(services):
     assert first[0]["id"] == urgent
     assert len(first + second) == 7
     assert len({row["id"] for row in first + second}) == 7
-

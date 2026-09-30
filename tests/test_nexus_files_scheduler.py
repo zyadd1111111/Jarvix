@@ -134,4 +134,3 @@ def test_restore_rechecks_allowed_root_and_native_identity(services, tmp_path):
     with pytest.raises(ValueError):
         recycle.restore([id])
     assert backend.calls == 0
-

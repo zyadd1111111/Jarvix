@@ -188,4 +188,3 @@ def test_both_providers_encode_only_explicit_image(provider_type):
     encoded = json.dumps(captured)
     assert "cGl4ZWxz" in encoded
     assert "private-source.png" not in encoded
-

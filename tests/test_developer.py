@@ -150,4 +150,3 @@ def test_command_timeout_terminates_only_owned_process(services):
     session = developer._session(result["session_id"])
     session.watchdog.join(5)
     assert session.process.poll() is not None and session.reason == "timeout"
-

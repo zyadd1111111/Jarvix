@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import threading
 from typing import Any, Callable
+import json
 
 from PySide6.QtCore import Qt, QThread, Signal
 from PySide6.QtGui import QColor, QPainter, QPen, QRadialGradient
@@ -35,8 +36,8 @@ def panel(title: str = "") -> tuple[QFrame, QVBoxLayout]:
     frame = QFrame()
     frame.setObjectName("Panel")
     layout = QVBoxLayout(frame)
-    layout.setContentsMargins(20, 17, 20, 18)
-    layout.setSpacing(13)
+    layout.setContentsMargins(21, 18, 21, 20)
+    layout.setSpacing(14)
     if title:
         layout.addWidget(label(title, "Heading"))
     return frame, layout
@@ -65,8 +66,26 @@ def table(headers: list[str]) -> QTableWidget:
     return result
 
 
+def evidence_text(value):
+    """Render only explicitly cited excerpts as plain text, never as active markup."""
+    if not isinstance(value, dict):
+        return ""
+    excerpts = []
+    for key in ("items", "excerpts", "evidence", "sections"):
+        for item in value.get(key, []) if isinstance(value.get(key), list) else []:
+            if isinstance(item, dict) and item.get("citation") and item.get("text"):
+                excerpts.append(str(item["text"]) + "\nSource: " + json.dumps(item["citation"], ensure_ascii=False))
+    for document in value.get("documents", []) if isinstance(value.get("documents"), list) else []:
+        if isinstance(document, dict) and (text := evidence_text(document)):
+            excerpts.append(text)
+    if not excerpts:
+        return ""
+    method = value.get("method", "Source excerpts supplied by this tool. Review citations before relying on them.")
+    return str(method) + "\n\n" + "\n\n".join(excerpts)
+
+
 class SignalOrb(QWidget):
-    """A static, painter-rendered identity mark; no decorative CPU animation."""
+    """A restrained glassy identity mark used for Jarvix's ambient presence."""
 
     def __init__(self, size=70, parent=None):
         super().__init__(parent)
@@ -76,21 +95,24 @@ class SignalOrb(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         center = self.rect().center()
-        radius = min(self.width(), self.height()) * .43
+        radius = min(self.width(), self.height()) * .44
         gradient = QRadialGradient(center, radius)
-        gradient.setColorAt(0, QColor(59, 92, 145, 55))
-        gradient.setColorAt(.65, QColor(45, 75, 123, 25))
+        gradient.setColorAt(0, QColor(124, 231, 255, 92))
+        gradient.setColorAt(.28, QColor(77, 166, 235, 48))
+        gradient.setColorAt(.68, QColor(105, 105, 224, 23))
         gradient.setColorAt(1, QColor(14, 20, 32, 0))
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(gradient)
         painter.drawEllipse(center, radius, radius)
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        for factor, color in ((.73, "#3d5077"), (.5, "#809edc"), (.25, "#a7baff")):
-            painter.setPen(QPen(QColor(color), 1.2))
+        for factor, color, width in ((.78, "#426788", 1.0), (.56, "#6fc8ec", 1.1), (.31, "#c4f4ff", 1.35)):
+            painter.setPen(QPen(QColor(color), width))
             painter.drawEllipse(center, radius * factor, radius * factor)
-        painter.setPen(QPen(QColor("#b8cfff"), 1.4))
-        painter.drawLine(center.x() - radius * .9, center.y(), center.x() - radius * .55, center.y())
-        painter.drawLine(center.x() + radius * .55, center.y(), center.x() + radius * .9, center.y())
+        painter.setPen(QPen(QColor("#d7fbff"), 1.2))
+        painter.drawLine(center.x() - radius * .96, center.y(), center.x() - radius * .62, center.y())
+        painter.drawLine(center.x() + radius * .62, center.y(), center.x() + radius * .96, center.y())
+        painter.drawLine(center.x(), center.y() - radius * .96, center.x(), center.y() - radius * .62)
+        painter.drawLine(center.x(), center.y() + radius * .62, center.x(), center.y() + radius * .96)
 
 
 class Job(QThread):
@@ -181,4 +203,3 @@ class TextPreview(QDialog):
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
-

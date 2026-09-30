@@ -14,9 +14,11 @@ from itertools import islice
 import psutil
 
 from jarvix.capabilities.schema import BOOL, ID, array, enum, register, string
+from jarvix.capabilities.operator_graph import references as result_references
 from jarvix.capabilities.workflow_conditions import (
     ConditionEvaluator, clock_time, network_connected, process_names, weekdays,
 )
+from jarvix.capabilities.workflow_values import NAME, bounded, resolve, validate_references
 from jarvix.domain import ToolResult
 from jarvix.runtime import CURRENT, check_cancelled, operation
 from jarvix.storage import now_iso
@@ -37,7 +39,12 @@ BACKGROUND_OPT_IN = frozenset({
 RETRY_SAFE = frozenset({"tasks.list", "projects.list", "system.status", "system.processes",
                         "files.inspect", "files.list", "files.folder_summary", "apps.search"})
 APPROVED_BACKGROUND_CALLS = contextvars.ContextVar("jarvix_workflow_approvals", default=frozenset())
-DEFINITION_FIELDS = ("name", "kind", "trigger", "config", "conditions", "steps", "enabled", "approved_tools")
+DEFINITION_FIELDS = ("name", "kind", "trigger", "config", "conditions", "steps", "enabled", "approved_tools", "variables")
+
+
+def _definition_values(row):
+    # Empty variables are omitted so immutable approvals from 0.5 remain valid.
+    return {key: row[key] for key in DEFINITION_FIELDS if key in row}
 
 
 def fingerprint(value):
@@ -61,6 +68,8 @@ def _actions(steps):
         elif step["kind"] == "branch":
             yield from _actions(step["then"])
             yield from _actions(step["else"])
+        elif step["kind"] in {"foreach", "subflow"}:
+            yield from _actions(step["steps"])
 
 
 class _RunCancellation(threading.Event):
@@ -164,10 +173,12 @@ class WorkflowService:
             value["shortcut"] = canonical
         return value
 
-    def _steps(self, steps, depth=0, budget=None):
+    def _steps(self, steps, depth=0, budget=None, results=None, variables=None, item=False, readonly=False, stack=()):
         budget = [0] if budget is None else budget
+        results = set() if results is None else results
+        variables = set() if variables is None else variables
         if not isinstance(steps, list) or depth > 3:
-            raise ValueError("Workflow nesting is limited to three branches.")
+            raise ValueError("Workflow nesting is limited to three levels.")
         cleaned = []
         for raw in steps:
             budget[0] += 1
@@ -175,17 +186,20 @@ class WorkflowService:
                 raise ValueError("A workflow supports at most 32 structured blocks.")
             kind = raw.get("kind")
             if kind == "action":
-                if set(raw) - {"kind", "tool", "arguments", "retries", "on_error"}:
+                if set(raw) - {"kind", "tool", "arguments", "retries", "on_error", "id"}:
                     raise ValueError("Unknown action field.")
                 name, args = raw.get("tool"), raw.get("arguments")
                 if not isinstance(name, str) or not isinstance(args, dict):
                     raise ValueError("Each action requires a registered tool and structured arguments.")
                 spec = self.s.registry.get(name)
+                if readonly and (spec.risk != "read" or spec.permission_level != 1):
+                    raise ValueError("Collection loops support only read-only Level 1 actions.")
                 if name.startswith("operator."):
                     raise ValueError("Operator sessions cannot be nested inside workflows; use registered action tools.")
                 if name.startswith(("workflows.", "routines.")) and name not in {"workflows.run", "routines.run"}:
                     raise ValueError("Workflow management cannot be nested in workflow actions.")
-                if self.s.registry.validate(name, args):
+                references = validate_references(args, results, variables, item)
+                if not references and self.s.registry.validate(name, args):
                     raise ValueError("Workflow action arguments do not match the tool schema.")
                 retries = raw.get("retries", 0)
                 if type(retries) is not int or not 0 <= retries <= 1:
@@ -195,8 +209,14 @@ class WorkflowService:
                 on_error = raw.get("on_error", "stop")
                 if on_error not in {"stop", "continue"}:
                     raise ValueError("Choose stop or continue for failure handling.")
-                cleaned.append({"kind": kind, "tool": name, "arguments": copy.deepcopy(args),
-                                "retries": retries, "on_error": on_error})
+                value = {"kind": kind, "tool": name, "arguments": bounded(args),
+                         "retries": retries, "on_error": on_error}
+                if "id" in raw:
+                    if not isinstance(raw["id"], str) or not NAME.fullmatch(raw["id"]) or raw["id"] in results:
+                        raise ValueError("Action output IDs must be unique bounded names.")
+                    results.add(raw["id"])
+                    value["id"] = raw["id"]
+                cleaned.append(value)
             elif kind == "delay":
                 if set(raw) != {"kind", "seconds"}:
                     raise ValueError("A delay requires seconds.")
@@ -204,15 +224,61 @@ class WorkflowService:
             elif kind == "branch":
                 if set(raw) - {"kind", "condition", "then", "else"}:
                     raise ValueError("Unknown branch field.")
-                cleaned.append({"kind": kind, "condition": self.conditions.validate(raw.get("condition")),
-                                "then": self._steps(raw.get("then", []), depth + 1, budget),
-                                "else": self._steps(raw.get("else", []), depth + 1, budget)})
+                condition = self.conditions.validate(raw.get("condition"))
+                if condition["kind"] == "result":
+                    validate_references({"$ref": condition["ref"]}, results, variables, item)
+                then_ids, else_ids = set(results), set(results)
+                cleaned.append({"kind": kind, "condition": bounded(condition),
+                    "then": self._steps(raw.get("then", []), depth + 1, budget, then_ids, variables, item, readonly, stack),
+                    "else": self._steps(raw.get("else", []), depth + 1, budget, else_ids, variables, item, readonly, stack)})
+                results.update(then_ids & else_ids)
+            elif kind == "set":
+                if set(raw) != {"kind", "name", "value"} or not isinstance(raw["name"], str) or not NAME.fullmatch(raw["name"]):
+                    raise ValueError("Variable blocks need a bounded name and JSON value.")
+                validate_references(raw["value"], results, variables, item)
+                variables.add(raw["name"])
+                if len(variables) > 32:
+                    raise ValueError("Workflow supports at most 32 named variables in a scope.")
+                cleaned.append({"kind": kind, "name": raw["name"], "value": bounded(raw["value"])})
+            elif kind == "foreach":
+                if set(raw) - {"kind", "items", "steps", "limit"}:
+                    raise ValueError("Unknown collection loop field.")
+                collection = raw.get("items")
+                validate_references(collection, results, variables, item)
+                limit = raw.get("limit", 20)
+                if type(limit) is not int or not 1 <= limit <= 20 or not isinstance(collection, (dict, list)):
+                    raise ValueError("Loop over a JSON collection with a limit from 1 to 20.")
+                if isinstance(collection, dict) and set(collection) != {"$ref"}:
+                    raise ValueError("Loop collection must be a list or structured reference.")
+                if isinstance(collection, list) and len(collection) > limit:
+                    raise ValueError("Collection exceeds its explicit loop limit.")
+                cleaned.append({"kind": kind, "items": bounded(collection), "limit": limit,
+                    "steps": self._steps(raw.get("steps", []), depth + 1, budget, set(results), set(variables), True, True, stack)})
+            elif kind == "subflow":
+                if set(raw) - {"kind", "workflow_id", "approval_fingerprint", "steps", "variables", "conditions"}:
+                    raise ValueError("Unknown subflow field.")
+                target = raw.get("workflow_id")
+                if not isinstance(target, str) or target in stack:
+                    raise ValueError("Subflow recursion is not supported.")
+                row = self.s.records.get("workflow", target)
+                if fingerprint(_definition_values(row)) != row.get("approval_fingerprint"):
+                    raise PermissionError("Subflow changed since its approval.")
+                if "approval_fingerprint" in raw and raw["approval_fingerprint"] != row["approval_fingerprint"]:
+                    raise PermissionError("Subflow was edited; review and save the parent again.")
+                child_variables = bounded(row.get("variables", {}))
+                child = self._steps(row["steps"], depth + 1, budget, variables=set(child_variables),
+                                    item=item, readonly=readonly, stack=(*stack, target))
+                value = {"kind": kind, "workflow_id": target, "approval_fingerprint": row["approval_fingerprint"],
+                         "steps": child, "variables": child_variables, "conditions": copy.deepcopy(row["conditions"])}
+                if any(raw[key] != value[key] for key in ("steps", "variables", "conditions") if key in raw):
+                    raise PermissionError("Subflow snapshot changed; review and save the parent again.")
+                cleaned.append(value)
             else:
-                raise ValueError("Choose an action, delay, or branch block.")
+                raise ValueError("Choose an action, delay, branch, variable, collection loop or subflow block.")
         return cleaned
 
     def _definition(self, name, steps, trigger="manual", config=None, conditions=None, enabled=False,
-                    kind="workflow", approved_tools=None, id=None):
+                    kind="workflow", approved_tools=None, id=None, variables=None):
         if not isinstance(name, str) or not name.strip() or len(name) > 160:
             raise ValueError("Workflow name must contain 1 to 160 characters.")
         if type(enabled) is not bool or kind not in {"workflow", "routine"}:
@@ -226,10 +292,21 @@ class WorkflowService:
             not isinstance(name, str) or name not in BACKGROUND_OPT_IN for name in approved_tools
         ):
             raise ValueError("Only supported reversible background tools can be approved.")
+        variables = {} if variables is None else bounded(variables)
+        if not isinstance(variables, dict) or len(variables) > 32 or any(
+            not isinstance(key, str) or not NAME.fullmatch(key) for key in variables
+        ):
+            raise ValueError("Use at most 32 named JSON workflow variables.")
+        for condition in conditions or []:
+            if isinstance(condition, dict) and condition.get("kind") == "result":
+                validate_references({"$ref": condition.get("ref")}, variables=variables)
         value = {"name": name.strip(), "kind": kind, "trigger": trigger,
                  "config": self._config(trigger, {} if config is None else config),
-                 "conditions": [self.conditions.validate(c) for c in (conditions or [])], "steps": self._steps(steps),
+                 "conditions": [bounded(self.conditions.validate(c)) for c in (conditions or [])],
+                 "steps": self._steps(steps, variables=set(variables), stack=(id,) if id else ()),
                  "enabled": enabled, "approved_tools": sorted(set(approved_tools))}
+        if variables:
+            value["variables"] = variables
         if not value["steps"]:
             raise ValueError("Add at least one workflow block.")
         if trigger != "manual":
@@ -247,6 +324,8 @@ class WorkflowService:
                 continue
             if name not in row["approved_tools"] or name not in BACKGROUND_OPT_IN or spec.permission_level != 2:
                 raise PermissionError("Scheduled actions require exact approval and a supported reversible tool.")
+            if result_references(action["arguments"]):
+                raise PermissionError("Background mutations require literal exact approved arguments, not dynamic values.")
             if name == "apps.open" and self.s.apps.arguments_for(action["arguments"]["id"]):
                 raise PermissionError("Applications with configured command arguments cannot run unattended.")
             calls.add(fingerprint([name, action["arguments"]]))
@@ -260,9 +339,9 @@ class WorkflowService:
                 "background_opt_in": bool(row["approved_tools"]), "next_run": self._next_run(row)}
 
     def save(self, name, steps, trigger="manual", config=None, conditions=None, enabled=False,
-             kind="workflow", approved_tools=None, id=None):
+             kind="workflow", approved_tools=None, id=None, variables=None):
         with self._lock:
-            row = self._definition(name, steps, trigger, config, conditions, enabled, kind, approved_tools, id)
+            row = self._definition(name, steps, trigger, config, conditions, enabled, kind, approved_tools, id, variables)
             row["approval_fingerprint"] = fingerprint(row)
             row.update(last_run_at=None, last_state=None, last_trigger_at=None)
             record_id = self.s.records.put("workflow", row, id)
@@ -272,11 +351,11 @@ class WorkflowService:
 
     def preview(self, id):
         row = self.get(id)
-        return {"id": id, **self.preview_definition(**{key: row[key] for key in DEFINITION_FIELDS})}
+        return {"id": id, **self.preview_definition(**_definition_values(row))}
 
     def _verified(self, id):
         row = self.s.records.get("workflow", id)
-        definition = self._definition(**{key: row[key] for key in DEFINITION_FIELDS})
+        definition = self._definition(**_definition_values(row))
         if fingerprint(definition) != row.get("approval_fingerprint"):
             raise PermissionError("Workflow changed since its approval; review and save it again.")
         return row
@@ -287,13 +366,13 @@ class WorkflowService:
         with self._lock:
             row = self._verified(id)
             row["enabled"] = enabled
-            row["approval_fingerprint"] = fingerprint({key: row[key] for key in DEFINITION_FIELDS})
+            row["approval_fingerprint"] = fingerprint(_definition_values(row))
             self.s.records.put("workflow", row, id)
         return {"id": id, "enabled": enabled}
 
     def duplicate(self, id, name):
         row = self.get(id)
-        values = {key: row[key] for key in DEFINITION_FIELDS}
+        values = _definition_values(row)
         values.update(name=name, enabled=False)
         return self.save(**values)
 
@@ -310,7 +389,7 @@ class WorkflowService:
 
     def export(self, id):
         row = self.get(id)
-        return {"version": 1, "workflow": {key: row[key] for key in DEFINITION_FIELDS}}
+        return {"version": 1, "workflow": _definition_values(row)}
 
     def import_workflow(self, definition):
         if not isinstance(definition, dict):
@@ -335,8 +414,19 @@ class WorkflowService:
     def test_definition(self, **definition):
         return self._test(self._definition(**definition))
 
+    def debug(self, id, cancel=None, on_event=None):
+        return self.run(id, cancel=cancel, on_event=on_event, test_mode=True)
+
+    def templates(self):
+        return [{"name": "Review today's tasks", "trigger": "manual", "steps": [
+            {"kind": "action", "id": "tasks", "tool": "tasks.list", "arguments": {}}]},
+            {"name": "Startup health check", "trigger": "jarvix_start", "enabled": False, "steps": [
+            {"kind": "action", "id": "health", "tool": "system.status", "arguments": {}},
+            {"kind": "action", "tool": "tasks.list", "arguments": {}}]}]
+
     def _test(self, row):
-        results = [{"kind": c["kind"], "matches": self.conditions.evaluate(c)} for c in row["conditions"]]
+        values = {"variables": row.get("variables", {}), "results": {}}
+        results = [{"kind": c["kind"], "matches": self.conditions.evaluate(c, values=values)} for c in row["conditions"]]
         return {"valid": True, "conditions": results, "would_run": all(c["matches"] for c in results),
                 "action_count": len(list(_actions(row["steps"]))), "actions_executed": 0,
                 "next_run": self._next_run(row)}
@@ -367,7 +457,9 @@ class WorkflowService:
             for control in self._active.values():
                 control["cancel"].set()
 
-    def run(self, id, unattended=False, cancel=None, on_event=None):
+    def run(self, id, unattended=False, cancel=None, on_event=None, test_mode=False):
+        if type(test_mode) is not bool:
+            raise ValueError("Test mode must be a boolean.")
         with self._lock:
             row = self._verified(id)
             if not self.s.settings.get("automations.enabled", True):
@@ -380,7 +472,8 @@ class WorkflowService:
             if any(value["workflow_id"] == id for value in self._active.values()):
                 raise ValueError("This workflow is already running; recursive runs are blocked.")
             run = {"workflow_id": id, "name": row["name"], "status": "running", "ok": False,
-                   "started_at": now_iso(), "steps": [], "unattended": unattended}
+                   "started_at": now_iso(), "steps": [], "unattended": unattended, "test_mode": test_mode,
+                   "actions_executed": 0, "actions_previewed": 0}
             run_id = self.s.records.put("workflow_run", run)
             if on_event is None and inherited:
                 on_event = inherited.on_event
@@ -389,6 +482,7 @@ class WorkflowService:
             self._active[run_id] = control
         token = APPROVED_BACKGROUND_CALLS.set(calls)
         deadline = inherited.deadline if inherited else float("inf")
+        values = {"variables": copy.deepcopy(row.get("variables", {})), "results": {}}
 
         def emit():
             self.s.records.put("workflow_run", run, run_id)
@@ -428,12 +522,12 @@ class WorkflowService:
                     emit()
                     checkpoint()
                     check_cancelled()
-                    if not all(self.conditions.evaluate(c) for c in row["conditions"]):
+                    if not all(self.conditions.evaluate(c, values=values) for c in row["conditions"]):
                         run.update(status="skipped", ok=True)
                     else:
-                        self._execute_steps(row["steps"], run, checkpoint, emit, unattended)
+                        self._execute_steps(row["steps"], run, checkpoint, emit, unattended, values=values)
                         failed = any(not step.get("ok", True) for step in run["steps"])
-                        run.update(status="partial" if failed else "completed", ok=not failed)
+                        run.update(status="partial" if failed else "tested" if test_mode else "completed", ok=not failed)
                 finally:
                     context.cancel = prior_cancel
                     context.checkpoint = prior_checkpoint
@@ -450,6 +544,9 @@ class WorkflowService:
                 if step["status"] == "running":
                     step.update(ok=False, status=run["status"],
                                 error="Interrupted action may have completed; inspect state before retrying.")
+                    step["failure_code"] = ("deadline_exceeded" if run["status"] == "timed_out" else
+                                            "cancelled" if run["status"] == "cancelled" else "workflow_stopped")
+                step.setdefault("ended_at", run["ended_at"])
             try:
                 emit()
                 with self._lock:
@@ -463,17 +560,25 @@ class WorkflowService:
             self.s.repository.audit("automation", f"Workflow {run['status']}; {len(run['steps'])} evaluated block(s)")
         return {"run_id": run_id, **run}
 
-    def _execute_steps(self, steps, run, checkpoint, emit, unattended, prefix=""):
+    def _execute_steps(self, steps, run, checkpoint, emit, unattended, prefix="", values=None, read_only=False):
+        values = {"variables": {}, "results": {}} if values is None else values
         for index, step in enumerate(steps):
             checkpoint()
             check_cancelled()
             path = f"{prefix}{index + 1}"
-            entry = {"path": path, "kind": step["kind"], "status": "running"}
+            if len(run["steps"]) >= 128:
+                raise ValueError("Workflow evaluated more than 128 blocks; reduce its collection limits.")
+            entry = {"path": path, "kind": step["kind"], "status": "running", "started_at": now_iso()}
             if step["kind"] == "action":
                 entry["tool"] = step["tool"]
             run["steps"].append(entry)
             emit()
+            started = time.monotonic()
             if step["kind"] == "delay":
+                if run["test_mode"]:
+                    entry.update(ok=True, status="preview_only", ended_at=now_iso())
+                    emit()
+                    continue
                 deadline = time.monotonic() + step["seconds"]
                 while time.monotonic() < deadline:
                     checkpoint()
@@ -481,17 +586,62 @@ class WorkflowService:
                     time.sleep(min(.05, max(0, deadline - time.monotonic())))
                 entry.update(ok=True, status="completed")
             elif step["kind"] == "branch":
-                matches = self.conditions.evaluate(step["condition"])
+                matches = self.conditions.evaluate(step["condition"], values=values)
                 entry.update(ok=True, status="completed", matched=matches)
                 self._execute_steps(step["then"] if matches else step["else"], run, checkpoint, emit, unattended,
-                                    prefix=path + ".")
+                                    prefix=path + ".", values=values, read_only=read_only)
+            elif step["kind"] == "set":
+                values["variables"][step["name"]] = resolve(step["value"], values)
+                bounded(values["variables"])
+                entry.update(ok=True, status="completed")
+            elif step["kind"] == "foreach":
+                items = resolve(step["items"], values)
+                if not isinstance(items, list) or len(items) > step["limit"]:
+                    entry.update(ok=False, status="failed", failure_code="collection_limit")
+                    raise ValueError("Collection no longer fits the approved read-only loop limit.")
+                entry["item_count"] = len(items)
+                for number, item in enumerate(items, 1):
+                    child = {"variables": copy.deepcopy(values["variables"]),
+                             "results": copy.deepcopy(values["results"]), "item": item}
+                    self._execute_steps(step["steps"], run, checkpoint, emit, unattended,
+                                        prefix=path + f".{number}.", values=child, read_only=True)
+                entry.update(ok=True, status="completed")
+            elif step["kind"] == "subflow":
+                current = self.s.records.get("workflow", step["workflow_id"])
+                if current["approval_fingerprint"] != step["approval_fingerprint"] or fingerprint(
+                    _definition_values(current)
+                ) != step["approval_fingerprint"]:
+                    raise PermissionError("Subflow changed during execution.")
+                child = {"variables": copy.deepcopy(step["variables"]), "results": {}}
+                if "item" in values:
+                    child["item"] = values["item"]
+                matches = all(self.conditions.evaluate(c, values=child) for c in step["conditions"])
+                if matches:
+                    self._execute_steps(step["steps"], run, checkpoint, emit, unattended,
+                                        prefix=path + ".", values=child, read_only=read_only)
+                entry.update(ok=True, status="completed" if matches else "skipped")
             else:
+                spec = self.s.registry.get(step["tool"])
+                if read_only and (spec.risk != "read" or spec.permission_level != 1):
+                    raise PermissionError("A loop action is no longer read-only.")
+                if run["test_mode"] and (spec.risk != "read" or spec.permission_level != 1):
+                    run["actions_previewed"] += 1
+                    entry.update(ok=True, status="preview_only", ended_at=now_iso())
+                    emit()
+                    continue
                 result = None
+                try:
+                    arguments = bounded(resolve(step["arguments"], values))
+                except (KeyError, IndexError, ValueError):
+                    entry.update(ok=False, status="failed", failure_code="reference_unavailable")
+                    raise ValueError("An earlier workflow output is unavailable.") from None
                 for attempt in range(step["retries"] + 1):
                     checkpoint()
                     check_cancelled()
-                    result = self.s.execute_tool(step["tool"], step["arguments"],
+                    result = self.s.execute_tool(step["tool"], arguments,
                                                  approve=(lambda _: False) if unattended else None)
+                    result, invalid = self.s.operator._validate_result(step["tool"], result)
+                    run["actions_executed"] += 1
                     entry["attempts"] = attempt + 1
                     if _outcome_ok(result):
                         break
@@ -501,16 +651,22 @@ class WorkflowService:
                 check_cancelled()
                 succeeded = _outcome_ok(result)
                 entry.update(ok=succeeded, status="completed" if succeeded else "failed")
+                if "id" in step:
+                    values["results"][step["id"]] = bounded(result.as_dict())
+                    bounded(values["results"])
+                    entry["output_id"] = step["id"]
                 if isinstance(result.data, dict):
                     if "verified" in result.data:
                         entry["verified"] = result.data["verified"] is True
                     if succeeded and result.data.get("requested") and not entry.get("verified"):
                         entry.update(status="requested", verified=False)
                 if not succeeded:
+                    entry["failure_code"] = "invalid_result" if invalid else "permission_denied" if result.sensitivity == "public" else "tool_failed"
                     entry["error"] = "Tool failed or permission was denied; no private tool values were stored."
                     emit()
                     if step["on_error"] == "stop":
                         raise RuntimeError("Workflow action failed.")
+            entry.update(ended_at=now_iso(), elapsed_seconds=round(time.monotonic() - started, 3))
             emit()
 
     def _next_run(self, row, now=None):
@@ -665,14 +821,15 @@ def setup(s, registry):
     props = {"name": string(160), "steps": array({"type": "object"}, 32), "id": ID,
              "trigger": enum(*TRIGGERS), "config": {"type": "object"},
              "conditions": array({"type": "object"}, 12), "enabled": BOOL,
-             "kind": enum("workflow", "routine"), "approved_tools": array(enum(*sorted(BACKGROUND_OPT_IN)), 32)}
+             "kind": enum("workflow", "routine"), "approved_tools": array(enum(*sorted(BACKGROUND_OPT_IN)), 32),
+             "variables": {"type": "object", "maxProperties": 32}}
 
     def run(id):
         value = service.run(id)
         return ToolResult(value["ok"], value, None if value["ok"] else "Workflow needs attention.")
 
-    def save_routine(name, steps, id=None, conditions=None):
-        return service.save(name, steps, id=id, conditions=conditions, kind="routine")
+    def save_routine(name, steps, id=None, conditions=None, variables=None):
+        return service.save(name, steps, id=id, conditions=conditions, kind="routine", variables=variables)
 
     register(registry, "workflows.list", "List workflows and reusable manual routines with next scheduled runs.",
              {"kind": enum("workflow", "routine")}, (), service.list)
@@ -699,12 +856,15 @@ def setup(s, registry):
              {"definition": {"type": "object"}}, ("definition",), service.import_workflow, 3)
     register(registry, "workflows.history", "Inspect persisted workflow timelines without private action values.",
              {"id": string(160, 0)}, (), service.history)
+    register(registry, "workflows.debug", "Debug an approved workflow by executing only Level 1 reads; preview mutations and skip delays. Private outputs stay in memory.",
+             {"id": ID}, ("id",), service.debug)
+    register(registry, "workflows.templates", "List usable workflow templates as disabled definitions for explicit review and saving.",
+             {}, (), service.templates)
     for name in ("pause", "resume", "cancel"):
         register(registry, "workflows." + name, f"{name.title()} an active workflow at a cooperative checkpoint.",
                  {"run_id": ID}, ("run_id",), getattr(service, name), 2)
     register(registry, "routines.list", "List reusable manual routines.", {}, (), lambda: service.list("routine"))
     register(registry, "routines.save", "Preview and confirm a reusable manual sequence of registered tool actions.",
-             {key: props[key] for key in ("name", "steps", "id", "conditions")}, ("name", "steps"), save_routine, 3)
+             {key: props[key] for key in ("name", "steps", "id", "conditions", "variables")}, ("name", "steps"), save_routine, 3)
     register(registry, "routines.run", "Run a saved manual routine with normal per-action permissions.",
              {"id": ID}, ("id",), run, 2)
-

@@ -311,4 +311,3 @@ class WakeWordService:
         for thread in (self._thread, self._recognition_thread):
             if thread and thread is not threading.current_thread():
                 thread.join(timeout=2)
-

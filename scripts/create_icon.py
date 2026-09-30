@@ -17,4 +17,3 @@ QSvgRenderer(str(assets / "jarvix.svg")).render(painter)
 painter.end()
 if not image.save(str(assets / "jarvix.ico")):
     raise SystemExit("ICO generation failed")
-

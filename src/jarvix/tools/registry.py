@@ -45,6 +45,10 @@ class ToolRegistry:
     def specs(self) -> list[ToolSpec]:
         return [copy.deepcopy(entry[0]) for entry in self._tools.values()]
 
+    def unregister(self, name: str) -> None:
+        """Host-only removal used when a reviewed declarative extension is disabled."""
+        self._tools.pop(name, None)
+
     def get(self, name: str) -> ToolSpec:
         if not isinstance(name, str) or name not in self._tools:
             raise ValueError("Unknown tool.")
@@ -89,4 +93,3 @@ class ToolRegistry:
             # Never expose exception text: it can contain credentials, local paths,
             # database contents, subprocess output or provider response bodies.
             return ToolResult(False, error="The tool could not complete this request.")
-

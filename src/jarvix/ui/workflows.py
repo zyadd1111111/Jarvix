@@ -41,7 +41,7 @@ class WorkflowSteps(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         row = QHBoxLayout()
-        for kind in ("action", "delay", "branch", "notification"):
+        for kind in ("action", "delay", "branch", "notification", "set", "foreach", "subflow"):
             row.addWidget(button("+ " + kind.capitalize(), lambda k=kind: self.add(k), "Quiet"))
         row.addStretch()
         layout.addLayout(row)
@@ -69,6 +69,9 @@ class WorkflowSteps(QWidget):
             detail = "Retry once" if step.get("retries") else "Stop on failure" if step.get("on_error", "stop") == "stop" else "Continue on failure"
         elif kind == "delay":
             text, detail = f"Wait {step.get('seconds', 1)} seconds", "Cancellation remains available"
+        elif kind in {"set", "foreach", "subflow"}:
+            text = {"set": "Set variable", "foreach": "Read-only collection loop", "subflow": "Pinned subflow"}[kind]
+            detail = step.get("name", step.get("workflow_id", "Bounded structured values"))
         else:
             text = "Branch · " + step.get("condition", {}).get("kind", "condition")
             detail = f"Then: {len(step.get('then', []))} action(s) · Otherwise: {len(step.get('else', []))} action(s)"
@@ -149,6 +152,19 @@ class WorkflowBlockDialog(QDialog):
             layout.addLayout(form)
             self.tool.currentIndexChanged.connect(self.select_tool)
             self.select_tool(initial=step.get("arguments", {}))
+            self.output_id = QLineEdit(step.get("id", ""))
+            self.output_id.setPlaceholderText("Optional output ID for later results.ID.data references")
+            layout.addWidget(self.output_id)
+            self.structured = QCheckBox("Use structured JSON arguments / references")
+            self.raw_arguments = QPlainTextEdit(json.dumps(step.get("arguments", {}), indent=2))
+            self.raw_arguments.setMaximumHeight(155)
+            self.raw_arguments.hide()
+            self.structured.toggled.connect(self.raw_arguments.setVisible)
+            self.structured.toggled.connect(lambda checked: self.scroll.setVisible(not checked))
+            layout.addWidget(self.structured)
+            layout.addWidget(self.raw_arguments)
+            from jarvix.capabilities.operator_graph import references
+            self.structured.setChecked(bool(references(step.get("arguments", {}))))
         elif self.kind == "delay":
             self.seconds = QSpinBox()
             self.seconds.setRange(0, 60)
@@ -156,6 +172,14 @@ class WorkflowBlockDialog(QDialog):
             self.seconds.setValue(step.get("seconds", 1))
             layout.addWidget(self.seconds)
             layout.addStretch()
+        elif self.kind in {"set", "foreach", "subflow"}:
+            defaults = {"set": {"kind": "set", "name": "topic", "value": "Jarvix"},
+                        "foreach": {"kind": "foreach", "items": [], "limit": 20, "steps": [
+                            {"kind": "action", "tool": "tasks.list", "arguments": {}}]},
+                        "subflow": {"kind": "subflow", "workflow_id": ""}}
+            layout.addWidget(label("Structured block. The full workflow validates references, limits, immutable subflows and permissions before saving.", "Muted", True))
+            self.raw_block = QPlainTextEdit(json.dumps(step if len(step) > 1 else defaults[self.kind], indent=2))
+            layout.addWidget(self.raw_block, 1)
         else:
             layout.addWidget(label("Safe condition", "Heading"))
             self.condition = QPlainTextEdit()
@@ -178,8 +202,10 @@ class WorkflowBlockDialog(QDialog):
 
     def select_tool(self, *_args, initial=None):
         from jarvix.capabilities.workflows import RETRY_SAFE
+        from jarvix.capabilities.operator_graph import references
         spec = self.services.registry.get(self.tool.currentData())
-        self.form = ParameterForm(spec.parameters, initial)
+        literal = {key: value for key, value in (initial or {}).items() if not references(value)}
+        self.form = ParameterForm(spec.parameters, literal)
         self.scroll.setWidget(self.form)
         self.permission.setText(f"{spec.description}\nPermission: {spec.permission} · Level {spec.permission_level or (1 if spec.risk == 'read' else 2)}")
         can_retry = spec.permission_level == 1 and spec.name in RETRY_SAFE
@@ -190,15 +216,22 @@ class WorkflowBlockDialog(QDialog):
     def save(self):
         try:
             if self.kind == "action":
-                arguments = self.form.arguments()
+                arguments = decode(self.raw_arguments, dict, "Arguments") if self.structured.isChecked() else self.form.arguments()
                 tool = self.tool.currentData()
                 invalid = self.services.registry.validate(tool, arguments)
-                if invalid:
+                from jarvix.capabilities.operator_graph import references
+                if invalid and not references(arguments):
                     raise ValueError(invalid.error)
                 self.value = {"kind": "action", "tool": tool, "arguments": arguments,
                               "retries": self.retries.value(), "on_error": self.on_error.currentText()}
+                if self.output_id.text().strip():
+                    self.value["id"] = self.output_id.text().strip()
             elif self.kind == "delay":
                 self.value = {"kind": "delay", "seconds": self.seconds.value()}
+            elif self.kind in {"set", "foreach", "subflow"}:
+                self.value = decode(self.raw_block, dict, "Block")
+                if self.value.get("kind") != self.kind:
+                    raise ValueError("Keep the selected block kind.")
             else:
                 self.value = {"kind": "branch", "condition": decode(self.condition, dict, "Condition"),
                               "then": self.then_steps.steps(), "else": self.else_steps.steps()}
@@ -234,6 +267,8 @@ class WorkflowBuilder(QDialog):
         form.addWidget(self.kind)
         self.trigger = QComboBox()
         self.trigger.addItems(TRIGGERS)
+        for item in self.services.plugins.contributions("triggers"):
+            self.trigger.addItem(item.get("title", item["name"]) + " · extension", item["target"])
         self.trigger.setCurrentText(self.definition.get("trigger", "manual"))
         form.addWidget(label("TRIGGER", "Eyebrow"))
         form.addWidget(self.trigger)
@@ -254,6 +289,11 @@ class WorkflowBuilder(QDialog):
         self.conditions.setPlainText(json.dumps(self.definition.get("conditions", []), indent=2))
         self.conditions.setMaximumHeight(170)
         form.addWidget(self.conditions)
+        form.addWidget(label("VARIABLES", "Eyebrow"))
+        self.variables = QPlainTextEdit(json.dumps(self.definition.get("variables", {}), indent=2))
+        self.variables.setMaximumHeight(90)
+        self.variables.setToolTip("JSON values. Reference with {\"$ref\": \"variables.name\"} in structured arguments.")
+        form.addWidget(self.variables)
         self.enabled = QCheckBox("Enable this workflow")
         self.enabled.setChecked(self.definition.get("enabled", False))
         form.addWidget(self.enabled)
@@ -275,6 +315,8 @@ class WorkflowBuilder(QDialog):
         self.test_button = button("Test conditions", self.test)
         row.addWidget(self.test_button)
         row.addWidget(button("Copy definition", self.copy_definition, "Quiet"))
+        row.addWidget(button("Debug saved workflow", self.debug, "Quiet"))
+        row.addWidget(button("Templates", lambda: self.window.open_capabilities("workflows.templates"), "Quiet"))
         row.addStretch()
         self.cancel_button = button("Cancel active save", self.cancel)
         self.cancel_button.setEnabled(False)
@@ -319,6 +361,7 @@ class WorkflowBuilder(QDialog):
             self.grants.addWidget(check)
 
     def trigger_changed(self, trigger):
+        trigger = self.trigger.currentData() or trigger
         defaults = {"schedule": {"time": "16:00", "weekdays": [0, 1, 2, 3, 4]},
                     "interval": {"minutes": 60}, "at_time": {"at": ""},
                     "app_start": {"name": ""}, "app_closed": {"name": ""},
@@ -331,10 +374,13 @@ class WorkflowBuilder(QDialog):
 
     def values(self):
         value = {"name": self.name.text().strip(), "kind": self.kind.currentText(),
-                 "trigger": self.trigger.currentText(), "config": decode(self.config, dict, "Trigger settings"),
+                 "trigger": self.trigger.currentData() or self.trigger.currentText(), "config": decode(self.config, dict, "Trigger settings"),
                  "conditions": decode(self.conditions, list, "Conditions"),
                  "steps": self.steps.steps(), "enabled": self.enabled.isChecked(),
                  "approved_tools": [name for name, widget in self.grant_widgets.items() if widget.isChecked()]}
+        variables = decode(self.variables, dict, "Variables")
+        if variables:
+            value["variables"] = variables
         if value["trigger"] == "hotkey":
             value["config"] = {"shortcut": self.hotkey.currentText()}
         if not value["name"]:
@@ -351,6 +397,12 @@ class WorkflowBuilder(QDialog):
             self.status.setText("Definition validated. Review and save when ready.")
         except (ValueError, TypeError, PermissionError, KeyError) as exc:
             self.status.setText(str(exc))
+
+    def debug(self):
+        if self.definition.get("id"):
+            self.window.open_capabilities("workflows.debug", {"id": self.definition["id"]})
+        else:
+            self.status.setText("Save and review the workflow before debugging. Only read-only steps execute in debug mode.")
 
     def test(self):
         if self.worker:
@@ -551,4 +603,3 @@ def import_definition(window):
 
     layout.addWidget(button("Review import", review, "Primary"))
     dialog.exec()
-

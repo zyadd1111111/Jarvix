@@ -37,7 +37,14 @@ def main() -> int:
     if not lock.tryLock(0):
         QMessageBox.information(None, "Jarvix is running", "This Jarvix profile is already open. Use --data-dir for another profile.")
         return 1
-    services = Services(data_dir)
+    try:
+        services = Services(data_dir)
+    except Exception:
+        lock.unlock()
+        if not args.screenshot:
+            QMessageBox.critical(None, "Jarvix profile needs attention",
+                "This profile could not be opened. Its data has been preserved. Check the profile permissions, Windows account and local backup before trying again.")
+        return 2
     window = MainWindow(services)
     if args.screenshot:
         window.resize(1440, 940)
@@ -62,4 +69,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

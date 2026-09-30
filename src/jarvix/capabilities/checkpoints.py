@@ -48,11 +48,20 @@ class CheckpointStore:
 
     def load(self, id):
         row = self.records.get("operator_checkpoint", id)
+        if not isinstance(row.get("payload"), str) or len(row["payload"]) > 200000:
+            raise ValueError("Checkpoint payload is invalid or too large.")
         value = json.loads(self.codec(base64.b64decode(row["payload"], validate=True), decrypt=True))
-        if value.get("version") != 1 or value.get("id") != id:
+        if not isinstance(value, dict) or value.get("version") != 1 or value.get("id") != id:
             raise ValueError("Checkpoint identity or version is invalid.")
+        if (not isinstance(value.get("plan"), dict) or not isinstance(value.get("results"), dict)
+                or not isinstance(value.get("mutations"), list)
+                or any(not isinstance(item, str) for item in value["mutations"])
+                or any(not isinstance(item, dict) or type(item.get("ok")) is not bool
+                       for item in value["results"].values())):
+            raise ValueError("Checkpoint plan, results or action receipts are invalid.")
+        # Reject non-JSON numeric values accepted by Python's permissive decoder.
+        json.dumps(value, allow_nan=False)
         return value
 
     def delete(self, id):
         self.records.delete("operator_checkpoint", id)
-

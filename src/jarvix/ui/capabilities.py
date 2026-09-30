@@ -7,11 +7,11 @@ import threading
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFormLayout, QHBoxLayout,
-    QLineEdit, QPlainTextEdit, QScrollArea, QSpinBox, QVBoxLayout, QWidget,
+    QLineEdit, QPlainTextEdit, QScrollArea, QSpinBox, QVBoxLayout, QWidget, QTabWidget,
 )
 
 from .chat import PermissionDialog
-from .widgets import ApprovalBridge, button, label
+from .widgets import ApprovalBridge, button, label, evidence_text
 
 
 class ToolJob(QThread):
@@ -143,6 +143,7 @@ class CapabilityDialog(QDialog):
         self.pending_dialog = None
         self.selected_tool = None
         self.form = None
+        self.continuation = None
         self.setWindowTitle("Jarvix · Local actions")
         self.resize(850, 760)
         layout = QVBoxLayout(self)
@@ -169,7 +170,24 @@ class CapabilityDialog(QDialog):
         self.result = QPlainTextEdit()
         self.result.setReadOnly(True)
         self.result.setPlaceholderText("Results stay on this computer. Nothing here is sent to an AI provider.")
-        layout.addWidget(self.result, 1)
+        self.result_tabs = QTabWidget()
+        self.result_tabs.addTab(self.result, "Structured result")
+        self.sources = QPlainTextEdit()
+        self.sources.setReadOnly(True)
+        self.result_tabs.addTab(self.sources, "Cited excerpts")
+        self.result_tabs.setTabEnabled(1, False)
+        layout.addWidget(self.result_tabs, 1)
+        followups = QHBoxLayout()
+        self.more_button = button("Next evidence page", self.next_page, "Quiet")
+        self.more_button.hide()
+        followups.addWidget(self.more_button)
+        self.collections = QComboBox()
+        self.collections.hide()
+        followups.addWidget(self.collections, 1)
+        self.collection_search = button("Search collection", self.search_collection, "Quiet")
+        self.collection_search.hide()
+        followups.addWidget(self.collection_search)
+        layout.addLayout(followups)
         self.status = label("Ready", "Muted", True)
         layout.addWidget(self.status)
         buttons = QHBoxLayout()
@@ -225,6 +243,13 @@ class CapabilityDialog(QDialog):
         self.form = ParameterForm(spec.parameters, arguments)
         self.form_scroll.setWidget(self.form)
         self.result.clear()
+        self.sources.clear()
+        self.result_tabs.setCurrentIndex(0)
+        self.result_tabs.setTabEnabled(1, False)
+        self.continuation = None
+        self.more_button.hide()
+        self.collections.hide()
+        self.collection_search.hide()
         self.status.setText("Ready")
         self.run_button.setEnabled(True)
         self.favorite.blockSignals(True)
@@ -279,8 +304,46 @@ class CapabilityDialog(QDialog):
             bridge.ready.set()
 
     def completed(self, result):
+        self.continuation = None
+        self.more_button.hide()
+        self.collections.hide()
+        self.collection_search.hide()
         self.result.setPlainText(json.dumps(result.as_dict(), indent=2, ensure_ascii=False, default=str))
+        source_text = evidence_text(result.data) if result.ok else ""
+        self.sources.setPlainText(source_text)
+        self.result_tabs.setTabEnabled(1, bool(source_text))
+        if source_text:
+            self.result_tabs.setCurrentIndex(1)
+        value = result.data if result.ok and isinstance(result.data, dict) else {}
+        if self.selected_tool.startswith(("documents.", "knowledge.")) and (
+                value.get("next_cursor") is not None or value.get("next_document_cursor") is not None):
+            arguments = dict(self.worker.arguments if self.worker else self.form.arguments())
+            if value.get("next_cursor") is not None:
+                arguments["cursor"] = value["next_cursor"]
+                if value.get("revision"):
+                    arguments["expected_revision"] = value["revision"]
+            else:
+                arguments.update(document_cursor=value["next_document_cursor"], cursor=0)
+                arguments.pop("expected_revision", None)
+            self.continuation = (self.selected_tool, arguments)
+            self.more_button.show()
+        if self.selected_tool == "knowledge.list" and value.get("items"):
+            self.collections.clear()
+            for item in value["items"]:
+                self.collections.addItem(item["name"], item["id"])
+            self.collections.show()
+            self.collection_search.show()
         self.status.setText("Completed locally" if result.ok else (result.error or "Action failed"))
+
+    def next_page(self):
+        if self.continuation and not self.worker:
+            name, arguments = self.continuation
+            self.select(name, arguments)
+            self.run_action()
+
+    def search_collection(self):
+        if not self.worker and self.collections.currentData():
+            self.select("knowledge.search", {"id": self.collections.currentData()})
 
     def failed(self, message):
         self.status.setText(message)
@@ -306,4 +369,3 @@ class CapabilityDialog(QDialog):
     def closeEvent(self, event):
         self.cancel()
         event.accept()
-

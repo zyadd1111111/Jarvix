@@ -3,7 +3,7 @@ import json
 import threading
 from datetime import datetime, timedelta
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QDialog, QLabel, QPlainTextEdit, QPushButton
 
 from jarvix.domain import PermissionRequest
@@ -22,6 +22,30 @@ def test_execution_confirmation_displays_exact_action_preview(window):
     assert dialog.deny_button.isDefault()
     assert not dialog.allow_button.isDefault()
     dialog.reject()
+
+
+def test_supervised_confirmation_survives_launch_worker(window, app):
+    from jarvix.domain import ToolResult, ToolSpec
+    performed, requests = [], []
+    s = window.services
+    s.registry.register(ToolSpec("test.confirm", "Explicit sensitive action", {
+        "type": "object", "properties": {}, "additionalProperties": False},
+        risk="write", permission_level=3), lambda _: performed.append(True) or ToolResult(True, {}))
+    def approval(request, cancel):
+        requests.append(request.tool_name)
+        return window.supervised_approval(request, cancel)
+    s.supervisor.set_approval_handler(approval)
+    timer = QTimer(window)
+    timer.setInterval(20)
+    timer.timeout.connect(lambda: [dialog.accept() for dialog in list(window.supervised_dialogs)])
+    timer.start()
+    result = s.supervisor.start({"goal": "Fresh confirmation after launch", "steps": [
+        {"id": "read", "tool": "tasks.list", "arguments": {}},
+        {"id": "write", "tool": "test.confirm", "arguments": {}}]}, approve=lambda _: True)
+    wait_until(app, lambda: s.operator.get(result["id"])["status"] in {"complete", "failed"})
+    timer.stop()
+    assert s.operator.get(result["id"])["status"] == "complete"
+    assert performed == [True] and requests == ["test.confirm"]
 
 
 def test_operator_ui_executes_and_displays_persisted_session(window, app, monkeypatch):
@@ -329,4 +353,3 @@ def test_background_lives_while_hidden_and_shutdown_waits_without_blocking(windo
         release.set()
     wait_until(app, lambda: not window.isVisible() and not background.running)
     assert not window.shutdown_timer.isActive()
-

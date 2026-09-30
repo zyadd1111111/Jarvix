@@ -99,4 +99,3 @@ class WakeWordPanel(QWidget):
     def shutdown(self):
         self.timer.stop()
         self.wake.stop()
-

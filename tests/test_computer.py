@@ -270,4 +270,3 @@ def test_win32_handle_bindings_and_monitor_inspection():
     for monitor in native.monitors():
         assert monitor["width"] > 0
         assert monitor["height"] > 0
-

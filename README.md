@@ -1,6 +1,23 @@
 # Jarvix
 
-Jarvix is a local-first desktop AI assistant built with Python, PySide6 and SQLite. Version 0.5.0, **Intelligence**, adds cited document reading, recoverable cross-app plans and explicit scoped memory to the existing Nexus operator.
+Jarvix is a local-first desktop AI assistant built with Python, PySide6 and SQLite. Version 0.6.0, **Adaptive**, adds local models, hybrid knowledge search, supervised execution and reviewed extensions to the existing Intelligence operator.
+
+## What's new in 0.6.0
+
+- **Local AI and routing:** Ollama and OpenAI-compatible loopback endpoints, model discovery, health checks, task-role models and a local-only switch. Automatic routing checks advertised capabilities and context capacity; unknown models gain no assumed tool or vision support.
+- **Local knowledge:** incremental keyword/embedding indexes for permitted documents, code, notes, memories, conversations, tasks and projects. Knowledge Spaces manage cited sources and explicit refresh; removed or changed sources cannot supply stale evidence. Embeddings use a configured local model; offline search falls back to keyword ranking.
+- **Supervised work:** bounded long-running sessions, progress, dependency graphs, step deadlines, failure classification, cancellation and safe foreground/background handoff. Restart recovery preserves verified work and never blindly replays uncertain changes.
+- **Extensions:** a versioned, reviewed declarative SDK for host-tool aliases, service/integration contributions, panels, palette commands and workflow presets. Changed manifests invalidate approval. Executable third-party plugin code is not loaded. See [extension guide](docs/EXTENSIONS.md).
+- **Richer workflows:** structured variables and output references, bounded read-only loops, pinned subflows, templates and debug mode that previews writes.
+- **App and Windows support:** guarded VS Code navigation, Explorer folder/selection inspection, native Windows Search filtered to allowed roots, virtual desktop awareness, open-with helpers, opt-in Recent items and confirmed Jarvix-only sign-in startup.
+- **Optional data protection:** migrate sensitive fields to current-user Windows DPAPI, including memory, conversations, account metadata, selected notes and cached records. The SQLite file itself, other metadata and pre-existing backups are not encrypted.
+
+## What got revamped in 0.6
+
+Home and Operator show clearer progress and dependencies. Knowledge, Search, local model health and extension management are available from the command center and Ctrl+K. Settings expose routing/privacy controls; workflow editing preserves variables and result references. Existing account connection cards and optional wake controls are now wired into the shell. Existing thirteen sections, permission checks and installation paths remain.
+
+Knowledge summaries/Q&A remain cited extractive evidence. Selected Drive sources contain explicitly imported metadata, not automatic cloud document downloads. Live account, model and native application behavior requires the user's configured environment.
+Replacing embedding weights under the same model tag requires a forced index refresh. Routing prices are user-supplied; unknown prices remain unknown. A loopback endpoint must itself be configured to run locally if you require offline operation.
 
 ## What's new in 0.5.0
 
@@ -48,7 +65,7 @@ Files opens document/collection actions with citation views. Operator exposes re
 
 ## Install on Windows
 
-For this local version, build or extract `dist\Jarvix-0.5.0-windows-x64.zip`, then run `Jarvix\Jarvix.exe`. You can also run `dist\Jarvix\Jarvix.exe` directly. Keep the extracted folder together, including `_internal`. This is an unsigned portable build.
+For this local version, build or extract `dist\Jarvix-0.6.0-windows-x64.zip`, then run `Jarvix\Jarvix.exe`. You can also run `dist\Jarvix\Jarvix.exe` directly. Keep the extracted folder together, including `_internal`. This is an unsigned portable build.
 
 Published downloads are available from [GitHub Releases](https://github.com/zyadd1111111/Jarvix/releases). A local build does not publish a release; use the version shown on that page, or build the current checkout with `scripts\build.ps1`.
 
@@ -65,6 +82,8 @@ python -m venv .venv
 ```
 
 On macOS or Linux, activate the virtual environment with `source .venv/bin/activate`, install with `python -m pip install -e ".[dev]"`, then run `python -m jarvix`. Local tools work without an AI key; configure an OpenAI or Gemini key in Settings to use cloud chat. `requirements-lock.txt` records the verified dependency set. `scripts\launch.ps1` starts Jarvix without a console on Windows.
+
+Optional wake-word detection in source installs requires `python -m pip install -e ".[voice]"` and a compatible local keyword model. It stays off at startup. The default portable package does not bundle that optional engine or download models.
 
 Use `--data-dir .\artifacts\test-profile` for an isolated profile. Storage otherwise defaults to `%LOCALAPPDATA%\Jarvix\jarvix.db` on Windows or the platform's user data directory.
 
@@ -101,7 +120,7 @@ Level 1 reads run immediately, subject to screen/clipboard access switches. Leve
 
 UI actions revalidate the inspected window and control identity. Password/credential fields and confirmation bypasses are blocked. Workflows cannot grant themselves access: background writes need approval for the exact safe action arguments and still obey control/root permissions. Scheduled workspace setups must expand into approved app/folder/URL actions; UI input, arbitrary commands and mutable whole-workspace launches are not allowed unattended.
 
-SQLite is not encrypted. Credentials have no plaintext fallback. Close Jarvix before manually copying its profile for backup. Tools call services; UI calls the application facade; providers never control the OS. The agent defaults to six model rounds, twelve model tool calls and thirty-two nested operations. Cancellation and deadlines are shared across nested actions.
+SQLite has optional sensitive-field DPAPI protection, not whole-database encryption. Credentials have no plaintext fallback. Close Jarvix before manually copying its profile for backup, or use the consistent backup action. Tools call services; UI calls the application facade; providers never control the OS. The agent defaults to six model rounds, twelve model tool calls and thirty-two nested operations. Cancellation and deadlines are shared across nested actions.
 
 ## Verify and build
 

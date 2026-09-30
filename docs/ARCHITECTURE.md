@@ -34,4 +34,3 @@ Jarvix is a new local-first desktop assistant, built from an empty directory. Th
 ## Future evolution
 
 Add migrations rather than changing deployed schemas in place; add adapters and registered tools rather than modifying chat routing. A future sandbox process should isolate third-party plugins. OAuth integrations need consent scopes, refresh-token vault storage, rate limits and provider-specific contract tests before activation. Continuous activity tracking and microphone capture require separate explicit opt-in.
-

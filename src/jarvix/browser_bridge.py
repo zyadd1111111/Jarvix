@@ -20,13 +20,13 @@ import uuid
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from jarvix.runtime import check_cancelled
+from jarvix.runtime import cancellable_lock, check_cancelled
 
 HOST_NAME = "com.jarvix.browser"
 EXTENSION_ID = re.compile(r"[a-p]{32}")
 PRIVATE_WORDS = re.compile(r"password|passwd|secret|token|credential|captcha|verification|one.?time|security.?code|credit.?card|card.?number|cvc|cvv", re.I)
 MAX_MESSAGE = 900_000
-OPERATIONS = frozenset({"tabs", "active_tab", "open_tab", "tab_action", "inspect", "act", "selection", "scroll", "group"})
+OPERATIONS = frozenset({"tabs", "active_tab", "open_tab", "tab_action", "inspect", "act", "selection", "scroll", "group", "downloads"})
 
 
 def safe_url(value):
@@ -251,7 +251,7 @@ class BrowserBridge:
         self._enabled()
         if operation not in OPERATIONS:
             raise ValueError("Unsupported browser operation.")
-        with self._request_lock:
+        with cancellable_lock(self._request_lock):
             with self._lock:
                 connection = self._clients.get(self.browser)
             if connection is None:
@@ -291,14 +291,22 @@ class BrowserBridge:
             result["url"] = safe_url(result.get("url", ""))
         return result
 
+    def downloads(self, limit=20):
+        if type(limit) is not int or not 1 <= limit <= 30:
+            raise ValueError("Choose 1–30 recent downloads.")
+        result = self._call("downloads", limit=limit)
+        return {"items": [{**item, "url": safe_url(item.get("url", ""))}
+                          for item in result.get("items", [])[:limit]], "continuous_tracking": False}
+
     def open_tab(self, url):
         from jarvix.capabilities.browser import public_url
         return self._call("open_tab", url=public_url(url))
 
-    def tab_action(self, tab_id, action):
+    def tab_action(self, tab_id, action, duplicate_of=None):
         if action not in {"switch", "reload", "back", "forward", "close", "duplicate"}:
             raise ValueError("Unsupported tab action.")
-        result = self._call("tab_action", tab_id=self._tab_id(tab_id), action=action)
+        guard = {"duplicate_of": self._tab_id(duplicate_of)} if duplicate_of is not None else {}
+        result = self._call("tab_action", tab_id=self._tab_id(tab_id), action=action, **guard)
         self.refs = {key: value for key, value in self.refs.items() if value["tab_id"] != tab_id}
         return result
 
@@ -343,4 +351,3 @@ class BrowserBridge:
         if not 1 <= len(tab_ids) <= 30 or len(title) > 100 or color not in {"grey", "blue", "red", "yellow", "green", "pink", "purple", "cyan", "orange"}:
             raise ValueError("Choose 1–30 tabs, a short title and a supported group color.")
         return self._call("group", tab_ids=[self._tab_id(value) for value in tab_ids], title=title, color=color)
-

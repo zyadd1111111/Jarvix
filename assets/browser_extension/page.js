@@ -16,7 +16,9 @@
       sensitive.test((e.innerText || '').slice(0, 300));
   };
   const visible = e => { const r = e.getBoundingClientRect(), s = getComputedStyle(e); return e.isConnected && r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'; };
-  const name = e => (e.getAttribute('aria-label') || (e.labels ? [...e.labels].map(l => l.textContent).join(' ') : '') || e.innerText || e.getAttribute('title') || e.getAttribute('placeholder') || '').trim().slice(0, 300);
+  const name = e => (e.getAttribute('aria-label') || (e.labels ? [...e.labels].map(l => l.textContent).join(' ') : '') ||
+    (!e.matches('input,textarea,select,[contenteditable],[role=textbox],[role=searchbox],[role=combobox]') ? e.innerText : '') ||
+    e.getAttribute('title') || e.getAttribute('placeholder') || '').trim().slice(0, 300);
   const role = e => e.getAttribute('role') || ({BUTTON:'button', A:'link', INPUT: e.type === 'checkbox' ? 'checkbox' : e.type === 'radio' ? 'radio' : e.type === 'search' ? 'searchbox' : 'textbox', TEXTAREA:'textbox', SELECT:'combobox'}[e.tagName]) || (/^H[1-6]$/.test(e.tagName) ? 'heading' : '');
   function pageText() {
     const walker = document.createTreeWalker(document.body || document.documentElement, NodeFilter.SHOW_TEXT);
@@ -30,6 +32,7 @@
   }
   function inspect() {
     refs.clear(); const elements = [];
+    const forms = new Map();
     if (!pageProtected()) {
       const candidates = document.querySelectorAll('button,a[href],input,textarea,select,[role],h1,h2,h3,h4,h5,h6');
       for (const e of [...candidates].slice(0, 5000)) {
@@ -38,10 +41,19 @@
         if (!['button','link','textbox','searchbox','combobox','checkbox','radio','tab','menuitem','heading'].includes(kind) || !visible(e) || protectedElement(e) || e.disabled || e.getAttribute('aria-disabled') === 'true') continue;
         const ref = crypto.randomUUID(); refs.set(ref, {element: e, signature: signature(e), expires: performance.now() + 180000, url: location.href});
         elements.push({ref, role: kind, name: label});
+        const form = e.closest('form');
+        if (form && ['textbox','searchbox','combobox','checkbox','radio','button'].includes(kind)) {
+          if (!forms.has(form) && forms.size < 12) forms.set(form, {
+            name: (form.getAttribute("aria-label") || form.getAttribute("name") || "Form").slice(0, 120), fields: []});
+          const group = forms.get(form);
+          if (group && group.fields.length < 30) group.fields.push({name: label, role: kind,
+            required: !!e.required || e.getAttribute('aria-required') === 'true', readonly: !!e.readOnly});
+        }
       }
     }
     return {ok: true, document: documentId, title: document.title.slice(0, 300), url: location.href,
-      elements, ...(pageProtected() ? {text: '', blocked: true} : pageText())};
+      elements, forms: [...forms.values()], headings: elements.filter(e => e.role === 'heading').map(e => e.name),
+      form_values_included: false, ...(pageProtected() ? {text: '', blocked: true} : pageText())};
   }
   function act(args) {
     const target = refs.get(args.ref);
@@ -78,4 +90,3 @@
     throw Error('Unsupported operation.');
   }});
 })();
-

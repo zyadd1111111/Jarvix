@@ -42,4 +42,3 @@ def run_scheduled(data_dir, schedule_id):
         if services:
             services.close()
         lock.unlock()
-

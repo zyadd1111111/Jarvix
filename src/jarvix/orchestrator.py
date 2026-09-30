@@ -38,6 +38,11 @@ For scheduled workspaces, inspect workspaces.preview and copy its approved concr
 Never schedule workspaces.launch, UI input, terminal commands, or nested workflows; these need interactive control.
 Distinguish school days from weekdays: ask if a school holiday calendar is intended; no school-calendar integration is available.
 Never silently retry failed writes. Re-observe state, explain partial completion and offer supported undo.
+After an operator failure, inspect operator.session and use operator.preview_replan/operator.replan for a changed recovery plan.
+Keep successful step IDs as $ref sources, replace only unfinished work, and never replay completed or uncertain writes.
+Use explicit depends_on arrays for independent branches. on_failure=continue_independent_reads is opt-in: it skips blocked
+dependencies and permits independent reads only; all further mutations require a freshly previewed recovery plan.
+Recovery suggestions are public actions and expected results only. Never reveal private chain-of-thought.
 Images are shared only for the current request; images mentioned in past messages are not available unless reattached.
 """
 
@@ -155,11 +160,25 @@ class Orchestrator:
                             executed_actions.add(fingerprint)
                         repeated_reads[fingerprint] = repeated_reads.get(fingerprint, 0) + 1
                         if self.executor:
-                            executed = self.executor(call.name, call.arguments, approve=approve, cancel=cancel, on_event=on_event)
+                            try:
+                                executed = self.executor(call.name, call.arguments, approve=approve, cancel=cancel, on_event=on_event)
+                            except InterruptedError:
+                                on_event("tool", {"name": call.name, "status": "Cancelled"})
+                                return "Request stopped or timed out. Completed actions are in Activity."
                         else:
                             executed = self.registry.execute(call.name, call.arguments)
                             self.repository.audit("tool", f"{call.name}: {'completed' if executed.ok else 'failed'}")
                         on_event("tool_result", {"name": call.name, "result": executed.as_dict()})
+                        # An in-flight tool can finish after Stop. Keep its receipt local
+                        # without opening another disclosure dialog or provider request.
+                        try:
+                            check_cancelled()
+                        except InterruptedError:
+                            on_event("tool", {"name": call.name, "status": "Cancelled"})
+                            return "Request stopped or timed out. Completed actions are in Activity."
+                        if cancel.is_set():
+                            on_event("tool", {"name": call.name, "status": "Cancelled"})
+                            return "Request stopped. Any already completed local actions remain in Activity."
                         if call.name == "capabilities.load" and executed.ok:
                             loaded = [available[item["name"]] for item in executed.data["tools"]
                                       if item["name"] in available]
@@ -171,7 +190,8 @@ class Orchestrator:
                         if len(raw) > 12000:
                             raw = json.dumps({"ok": executed.ok, "truncated": True,
                                               "excerpt": raw[:11000]}, ensure_ascii=False)
-                        if executed.sensitivity == "local" and not self.permissions.disclose(spec, call.arguments, raw, approve):
+                        if (executed.sensitivity == "local" and not getattr(provider, "is_local", False)
+                                and not self.permissions.disclose(spec, call.arguments, raw, approve)):
                             result = {"ok": executed.ok, "data": None,
                                       "disclosure_denied": True,
                                       "message": "Action result kept local. Do not retry or infer its content."}
@@ -182,4 +202,3 @@ class Orchestrator:
                 messages.append(Message("tool", json.dumps(result, ensure_ascii=False, default=str),
                                         tool_call_id=call.id, name=call.name))
         raise ProviderError("The planning limit was reached. Completed actions are in Activity; narrow the request to continue.")
-

@@ -239,4 +239,3 @@ class CommandOverlay(QDialog):
     def dismiss_if_inactive(self):
         if not self.isActiveWindow():
             self.hide()
-

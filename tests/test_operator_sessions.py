@@ -260,4 +260,3 @@ def test_chat_schedule_is_structured_and_requires_confirmation(services, monkeyp
     assert len(confirmations) == 1
     assert confirmations[0].arguments["config"]["time"] == "16:00"
     assert len(services.workflows.list()) == int(allow_save)
-

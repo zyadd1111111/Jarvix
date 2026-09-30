@@ -203,4 +203,3 @@ class IntegrationsPage(ProviderPage):
         self.timer.stop()
         for key in list(self.connections):
             self.cancel_connection(key)
-

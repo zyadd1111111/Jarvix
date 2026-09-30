@@ -176,4 +176,3 @@ def test_shell_history_palette_actions_and_persistent_state(app, tmp_path, monke
     second.deleteLater()
     QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
     services.close()
-

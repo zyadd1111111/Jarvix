@@ -568,4 +568,3 @@ def setup(services, registry):
     add("csv_preview", "Preview up to 30 columns of a local CSV/TSV file.", {"path": PATH, "rows": integer(1, 30)}, ["path"], files.csv_preview)
     add("pdf_metadata", "Inspect PDF page count, encryption flag and metadata (32 MiB maximum).", {"path": PATH}, ["path"], files.pdf_metadata)
     add("recycle", "Send an approved file/folder to Windows Recycle Bin with a restoration receipt where supported. Always requires fresh confirmation.", {"path": PATH}, ["path"], files.recycle, 3)
-

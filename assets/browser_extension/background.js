@@ -11,6 +11,7 @@ const safeURL = value => {
   } catch { return '[invalid URL]'; }
 };
 const tabInfo = t => ({id: String(t.id), title: (t.title || '').slice(0, 300), url: safeURL(t.url || ''),
+  dedupe_safe: /^https?:\/\//i.test(t.url || '') && safeURL(t.url) === t.url,
   active: !!t.active, window_id: t.windowId, group_id: t.groupId});
 function publicURL(value) {
   const u = new URL(value);
@@ -33,6 +34,14 @@ async function page(id, operation, args) {
   return values[0].result;
 }
 async function dispatch(operation, args) {
+  if (operation === 'downloads') {
+    if (!await chrome.permissions.contains({permissions: ['downloads']})) throw Error('Enable optional Downloads access in the Jarvix extension popup.');
+    if (!Number.isInteger(args.limit) || args.limit < 1 || args.limit > 30) throw Error('Choose 1–30 downloads.');
+    const items = await chrome.downloads.search({limit: args.limit, orderBy: ['-startTime']});
+    return {items: items.filter(d => !d.incognito).map(d => ({id: String(d.id), filename: d.filename,
+      url: safeURL(d.url), state: d.state, exists: d.exists, bytes_received: d.bytesReceived,
+      total_bytes: d.totalBytes, started_at: d.startTime, ended_at: d.endTime || null}))};
+  }
   if (operation === 'tabs') return {items: (await chrome.tabs.query({})).filter(t => !t.incognito).slice(0, 100).map(tabInfo)};
   if (operation === 'active_tab') {
     const window = await chrome.windows.getLastFocused();
@@ -55,6 +64,10 @@ async function dispatch(operation, args) {
       return {performed: true, id: String(copy.id), verified: true};
     }
     if (args.action === 'close') {
+      if (args.duplicate_of !== undefined) {
+        const original = await knownTab(args.duplicate_of);
+        if (original.id === tab.id || original.url !== tab.url || !tabInfo(tab).dedupe_safe) throw Error('Tabs are no longer safe duplicates.');
+      }
       await chrome.tabs.remove(tab.id);
       const exists = (await chrome.tabs.query({})).some(t => t.id === tab.id);
       return {performed: !exists, verified: !exists};
@@ -105,4 +118,3 @@ chrome.runtime.onMessage.addListener((message, sender, reply) => {
   reply({connected, error: lastError}); return false;
 });
 // No startup reconnect or tab/activity listeners: connection is a visible opt-in.
-

@@ -11,7 +11,7 @@ from typing import Any
 import httpx
 
 from jarvix.domain import ProviderError
-from jarvix.runtime import CURRENT, check_cancelled
+from jarvix.runtime import CURRENT, cancel_response, check_cancelled
 
 MAX_REQUEST_BYTES = 512 * 1024
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -73,20 +73,21 @@ class Transport:
         self._api_key = api_key.strip()
         self._client = client
 
-    def request(self, url: str, payload: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
+    def request(self, url: str, payload: dict[str, Any] | None, headers: dict[str, str],
+                *, method: str = "POST", timeout: httpx.Timeout = TIMEOUT) -> dict[str, Any]:
         check_cancelled()
-        body = dump_json(payload).encode("utf-8")
-        if len(body) > self._request_limit(payload):
+        body = dump_json(payload).encode("utf-8") if payload is not None else None
+        if body is not None and len(body) > self._request_limit(payload):
             raise ProviderError("This conversation exceeds the local request limit. Start a new conversation or shorten it.")
         # A fresh owned client is closed even on error. HTTPX's default transport
         # has zero retries; redirects are disabled even on injected test clients.
         client = self._client or httpx.Client(timeout=TIMEOUT, trust_env=False)
         try:
             with client.stream(
-                "POST", url, content=body,
+                method, url, content=body,
                 headers={"Content-Type": "application/json", "Accept": "application/json", **headers},
-                timeout=TIMEOUT, follow_redirects=False,
-            ) as response:
+                timeout=timeout, follow_redirects=False,
+            ) as response, cancel_response(response):
                 self._check_status(response.status_code)
                 data = bytearray()
                 for chunk in response.iter_bytes(chunk_size=16 * 1024):
@@ -100,8 +101,10 @@ class Transport:
                     raise ProviderError("The AI provider returned an unexpected response. No tool was executed.")
                 return parsed
         except httpx.TimeoutException:
+            check_cancelled()
             raise ProviderError("The AI provider timed out. Check the connection and try again; Jarvix did not retry automatically.") from None
-        except httpx.HTTPError:
+        except (httpx.HTTPError, OSError):
+            check_cancelled()
             raise ProviderError("Could not reach the AI provider securely. Check your network connection and try again.") from None
         finally:
             if self._client is None:
@@ -216,4 +219,3 @@ class Transport:
         else:
             message = "The AI provider could not complete this request. Check your provider configuration."
         raise ProviderError(message)
-

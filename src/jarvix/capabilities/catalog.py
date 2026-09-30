@@ -5,7 +5,8 @@ from jarvix.domain import ToolResult
 BASE_TOOLS = frozenset({"capabilities.load", "notes.search", "notes.create", "tasks.list", "tasks.create",
     "memory.search", "memory.remember", "apps.list", "apps.open", "projects.list", "files.search",
     "files.read_text", "system.status", "web.open", "web.search", "calculate.evaluate",
-    "operator.run", "operator.preview", "workspaces.list", "routines.list", "context.inspect"})
+    "operator.run", "operator.preview", "workspaces.list", "routines.list", "context.inspect",
+    "intelligence.plan", "documents.summarize", "documents.question"})
 
 
 def initial_tools(specs):
@@ -31,4 +32,3 @@ def setup(s, registry):
              "Load more tools before using them. Choose families: " + ", ".join(groups) +
              ". Loading capabilities does not execute their actions or read private data.",
              {"groups": array(enum(*groups), 3)}, ("groups",), load)
-

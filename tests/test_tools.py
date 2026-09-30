@@ -23,7 +23,8 @@ class FakeServices:
         from jarvix.capabilities.browser import BrowserService
         self.repository = SimpleNamespace(audit=lambda *_: None)
         self.browser = BrowserService(self)
-        self.productivity = SimpleNamespace(memories=SimpleNamespace(list=self.search_memories))
+        self.productivity = SimpleNamespace(memories=SimpleNamespace(
+            list=self.search_memories, remember_sensitive=lambda content: {"id": self.add_memory(content)}))
 
     def search_memories(self, query=""):
         return {"items": [row for row in self.memories if query.casefold() in row["content"].casefold()]}
@@ -330,4 +331,3 @@ def test_voice_sends_text_as_stdin_and_terminates_owned_process(monkeypatch, rat
     finally:
         stopped.set()
         voice.close()
-

@@ -82,4 +82,3 @@ def test_repository_table_names_are_not_arbitrary_sql(tmp_path):
     with pytest.raises(ValueError):
         repo.list("settings; DROP TABLE notes")
     assert repo.list("notes") == []
-

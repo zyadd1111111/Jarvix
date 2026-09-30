@@ -6,6 +6,7 @@ import os
 import subprocess
 import threading
 import copy
+import math
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -59,12 +60,21 @@ class Services:
         from jarvix.capabilities import files, developer, computer, productivity, browser, workspaces
         from jarvix.capabilities import notifications, automations, chat_management, integration, catalog
         from jarvix.capabilities import desktop, workflows, operator, undo, context, scheduler, recycle
+        from jarvix.capabilities import documents, intelligence, search, knowledge, supervisor, plugins
+        from jarvix.capabilities import windows_integration, app_adapters
+        from jarvix import data_protection
         from jarvix.speech_input import SpeechInputService
-        for module in (files, developer, computer, productivity, browser, workspaces,
+        for module in (files, documents, developer, computer, productivity, browser, workspaces,
                        notifications, automations, chat_management, integration, desktop, workflows,
-                       undo, operator, context, scheduler, recycle, catalog):
+                       undo, operator, context, scheduler, recycle, intelligence, search, knowledge,
+                       supervisor, data_protection, windows_integration, app_adapters):
             module.setup(self, self.registry)
+        self._setup_models()
+        plugins.setup(self, self.registry)
+        catalog.setup(self, self.registry)
         self.microphone = SpeechInputService(self)
+        from jarvix.wake_word import WakeWordService
+        self.wake_word = WakeWordService(self)
         from jarvix.background import BackgroundRuntime
         self.background = BackgroundRuntime(self)
 
@@ -89,14 +99,20 @@ class Services:
                 app_preview = None
                 workflow_snapshot = None
                 schedule_snapshot = None
+                if name == "plugins.enable":
+                    preview_arguments = {**arguments, "extension": self.plugins.preview(arguments["id"])}
+                if name == "windows.set_startup":
+                    preview_arguments = {**arguments, "startup": self.windows_integration.startup_preview()}
                 if name == "scheduler.install":
                     schedule_snapshot = self.scheduler.approval_snapshot(arguments)
                     preview_arguments = {**arguments, "schedule": self.scheduler.preview(**arguments)}
-                if name in {"workflows.toggle", "workflows.run", "routines.run"}:
+                if name in {"workflows.toggle", "workflows.run", "routines.run", "workflows.delete"}:
                     workflow_snapshot = self.records.get("workflow", arguments["id"])["approval_fingerprint"]
                     preview_arguments = {**arguments, "workflow": self.workflows.preview(arguments["id"])}
                     spec = replace(spec, permission_level=3, description=
                         "Review this exact workflow and its background approvals. Every action still checks permissions.")
+                if name in {"workflows.save", "routines.save"} and arguments.get("id"):
+                    workflow_snapshot = self.records.get("workflow", arguments["id"])["approval_fingerprint"]
                 if name == "apps.open":
                     configured = self.apps.arguments_for(arguments["id"])
                     if configured:
@@ -165,10 +181,10 @@ class Services:
         return self.repository.list("memories")
 
     def add_memory(self, content: str):
-        record_id = self.repository.new_id()
-        self.db.execute("INSERT INTO memories VALUES (?,?,?)", (record_id, required_text(content, "Memory", 5000), now_iso()))
-        self.repository.audit("memory", "Explicit memory saved locally")
-        return record_id
+        result = self.productivity.memories.remember_sensitive(content)
+        if isinstance(result, ToolResult):
+            raise ValueError("A matching memory already exists. Review it in Memory before saving a separate fact.")
+        return result["id"]
 
     def delete_memory(self, record_id):
         self.repository.delete("memories", record_id)
@@ -361,7 +377,142 @@ class Services:
         return self.db.query("SELECT role,content,created_at FROM messages WHERE conversation_id=? ORDER BY id", (record_id,))
 
     def provider_status(self):
-        return {provider: bool(self.vault.get(provider)) for provider in ("openai", "gemini")}
+        return {**{provider: bool(self.vault.get(provider)) for provider in ("openai", "gemini")},
+                **{provider: bool(self.settings.get("model." + provider, "")) for provider in ("ollama", "local")},
+                "auto": any(bool(self.vault.get(p)) for p in ("openai", "gemini"))
+                        or any(bool(self.settings.get("model." + p, "")) for p in ("ollama", "local"))}
+
+    def make_provider(self, provider_id):
+        from jarvix.providers import create_provider, LOCAL_PROVIDER_URLS
+        local_only = self.settings.get("ai.local_only", False)
+        if provider_id in LOCAL_PROVIDER_URLS:
+            return create_provider(provider_id, base_url=self.settings.get("endpoint." + provider_id,
+                                   LOCAL_PROVIDER_URLS[provider_id]), local_only=local_only)
+        if local_only:
+            raise ProviderError("Local-only mode blocks cloud AI. Choose Ollama or a local endpoint.")
+        key = self.vault.get(provider_id)
+        if not key:
+            raise ProviderError(f"Configure your {provider_id.title()} API key in Integrations to use AI chat. Local tools remain available.")
+        return create_provider(provider_id, key)
+
+    def discover_models(self, provider_id):
+        from jarvix.providers import LOCAL_PROVIDER_URLS
+        if provider_id not in LOCAL_PROVIDER_URLS:
+            raise ValueError("Model discovery is available for configured local endpoints.")
+        provider = self.make_provider(provider_id)
+        try:
+            health = provider.health()
+            configured = {self.settings.get("model." + provider_id, "")}
+            configured.update(choice["model"] for choice in self.settings.get("routing.roles", {}).values()
+                              if choice.get("provider") == provider_id)
+            for index, model in enumerate(health.get("models", [])):
+                if model["id"] in configured:
+                    try:
+                        health["models"][index] = provider.model_info(model["id"]).as_dict()
+                    except ProviderError:
+                        health["models"][index]["available"] = False
+            self.records.put("provider_health", health, provider_id)
+            return health
+        finally:
+            provider.close()
+
+    def model_router(self, refresh=False):
+        from jarvix.model_router import ModelCandidate, ModelRouter
+        from jarvix.providers import DEFAULT_MODELS
+        candidates = []
+        costs = self.settings.get("routing.costs", {})
+        def cost(provider, model):
+            value = costs.get(provider + ":" + model)
+            return value if type(value) in {int, float} and math.isfinite(value) and 0 <= value <= 1000000 else None
+        for provider_id in ("ollama", "local"):
+            if refresh:
+                try:
+                    self.discover_models(provider_id)
+                except ProviderError:
+                    self.records.put("provider_health", {"provider": provider_id, "available": False,
+                        "is_local": True, "models": []}, provider_id)
+            try:
+                health = self.records.get("provider_health", provider_id)
+            except ValueError:
+                continue
+            for model in health.get("models", []):
+                candidates.append(ModelCandidate(provider_id, model["id"], frozenset(model.get("capabilities", [])),
+                    model.get("context_length"), is_local=True,
+                    available=health.get("available") is True and model.get("available", True) is True,
+                    cost=cost(provider_id, model["id"])))
+        if not self.settings.get("ai.local_only", False):
+            for provider_id in ("openai", "gemini"):
+                if self.vault.get(provider_id):
+                    models = {self.settings.get("model." + provider_id, DEFAULT_MODELS[provider_id])}
+                    models.update(choice["model"] for choice in self.settings.get("routing.roles", {}).values()
+                                  if choice.get("provider") == provider_id)
+                    for model in sorted(models):
+                        # Existing bundled defaults have known adapter support. A custom
+                        # cloud model is usable explicitly but gains no invented metadata.
+                        known = model == DEFAULT_MODELS[provider_id]
+                        candidates.append(ModelCandidate(provider_id, model,
+                            frozenset({"tools", "vision", "completion"}) if known else frozenset(),
+                            1_047_576 if known and provider_id == "openai" else 1_048_576 if known else None,
+                            cost=cost(provider_id, model)))
+        return ModelRouter(candidates, self.settings.get("routing.roles", {}))
+
+    def route_model(self, task="chat", require_tools=False, require_vision=False, context_tokens=0):
+        return self.model_router(refresh=True).select(task, require_tools=require_tools, require_vision=require_vision,
+            context_tokens=context_tokens, local_only=self.settings.get("ai.local_only", False),
+            prefer_local=self.settings.get("routing.prefer_local", True),
+            cost_preference=self.settings.get("routing.cost_preference", "balanced")).as_dict()
+
+    def configure_model_role(self, role, provider_id, model):
+        from jarvix.model_router import MODEL_ROLES
+        if role not in MODEL_ROLES or provider_id not in {"openai", "gemini", "ollama", "local"}:
+            raise ValueError("Choose a supported model role and provider.")
+        roles = self.settings.get("routing.roles", {})
+        roles[role] = {"provider": provider_id, "model": required_text(model, "Model", 150)}
+        self.settings.set("routing.roles", roles)
+        return {"role": role, **roles[role]}
+
+    def embedding_provider(self):
+        route = self.settings.get("routing.roles", {}).get("embeddings")
+        if not route:
+            return None
+        if route.get("provider") not in {"ollama", "local"}:
+            raise PermissionError("Search embeddings must use a local endpoint.")
+        provider = self.make_provider(route["provider"])
+        try:
+            if "embeddings" not in provider.model_info(route["model"]).capabilities:
+                raise ProviderError("This model does not advertise embeddings.")
+        except Exception:
+            provider.close()
+            raise
+        return provider, route["model"]
+
+    def configure_model_cost(self, provider_id, model, input_cost):
+        if (provider_id not in {"openai", "gemini", "ollama", "local"}
+                or type(input_cost) not in {int, float} or not math.isfinite(input_cost)
+                or not 0 <= input_cost <= 1000000):
+            raise ValueError("Choose a provider and finite, nonnegative cost per million input tokens.")
+        model = required_text(model, "Model", 150)
+        costs = self.settings.get("routing.costs", {})
+        costs[provider_id + ":" + model] = input_cost
+        self.settings.set("routing.costs", costs)
+        return {"provider": provider_id, "model": model, "input_cost": input_cost,
+                "source": "User supplied; pricing is not fetched or verified."}
+
+    def _setup_models(self):
+        from jarvix.capabilities.schema import BOOL, enum, integer, register, string
+        register(self.registry, "models.discover", "Check a configured loopback endpoint and discover its exposed capabilities. Never downloads models.",
+                 {"provider_id": enum("ollama", "local")}, ("provider_id",), self.discover_models)
+        register(self.registry, "models.route", "Preview a configured model choice based on task, capability and privacy requirements.",
+                 {"task": enum("chat", "planning", "summarization", "embeddings", "vision"), "require_tools": BOOL,
+                  "require_vision": BOOL, "context_tokens": integer(0, 1000000)}, (), self.route_model)
+        register(self.registry, "models.configure_role", "Configure an explicit model for a task role. Local-only mode still applies.",
+                 {"role": enum("chat", "planning", "summarization", "embeddings", "vision"),
+                  "provider_id": enum("openai", "gemini", "ollama", "local"), "model": string(150)},
+                 ("role", "provider_id", "model"), self.configure_model_role, 2)
+        register(self.registry, "models.configure_cost", "Set a user-supplied cost per million input tokens for low-cost routing. Unknown pricing stays unknown; explicit role choices take priority.",
+                 {"provider_id": enum("openai", "gemini", "ollama", "local"), "model": string(150),
+                  "input_cost": {"type": "number", "minimum": 0, "maximum": 1000000}},
+                 ("provider_id", "model", "input_cost"), self.configure_model_cost, 2)
 
     def set_api_key(self, provider_id, key):
         self.vault.set(provider_id, key)
@@ -387,35 +538,47 @@ class Services:
         if not self._chat_lock.acquire(blocking=False):
             raise RuntimeError("A request is already running.")
         try:
-            from jarvix.providers import create_provider
             self.repository.append_message(conversation_id, "user", text)
-            self.db.execute("UPDATE conversations SET title=? WHERE id=? AND title='New conversation'", (text[:65], conversation_id))
-            key = self.vault.get(provider_id)
-            if not key:
-                answer = f"Configure your {provider_id.title()} API key in Integrations to use AI chat. Notes, tasks, memory, files and system tools are available locally now."
-            else:
-                provider = create_provider(provider_id, key)
-                try:
-                    with operation(cancel, approve, timeout=self.settings.get("agent.timeout_seconds", 120)):
-                        from jarvix.attachments import disclose_images
-                        messages = bounded_history(self.conversation_messages(conversation_id))
-                        images = disclose_images(attachments, provider, model, approve, self.repository)
-                        if images:
-                            messages[-1].images = images
-                            self.records.put("chat_attachment", {"conversation_id": conversation_id,
-                                "images": [image.description() for image in images], "provider": provider_id})
-                        answer = self.orchestrator.run(provider, required_text(model, "Model", 150),
-                                messages, self.enabled_tools(),
-                                approve, on_event, cancel, lambda value: setattr(self, "latest_context", value),
-                                max_rounds=self.settings.get("agent.max_rounds", 6))
-                except ProviderError as exc:
-                    self.repository.audit("provider", f"{provider_id}: request failed")
-                    answer = str(exc)
-                except InterruptedError:
-                    answer = "Request stopped or timed out. Completed actions remain in Activity."
-                finally:
-                    if hasattr(provider, "close"):
-                        provider.close()
+            self.db.execute("UPDATE conversations SET title=? WHERE id=? AND jarvix_plain(title)='New conversation'", (text[:65], conversation_id))
+            provider = None
+            try:
+                with operation(cancel, approve, timeout=self.settings.get("agent.timeout_seconds", 120)):
+                    if provider_id == "auto":
+                        from jarvix.capabilities.catalog import initial_tools
+                        task = "vision" if attachments else self.settings.get("chat.role", "chat")
+                        history = bounded_history(self.conversation_messages(conversation_id))
+                        specs = initial_tools([spec for spec in self.registry.specs() if spec.name in self.enabled_tools()])
+                        schemas = json.dumps([{"name": spec.name, "description": spec.description,
+                                               "parameters": spec.parameters} for spec in specs])
+                        # Conservative estimate, including system/history, enabled schemas,
+                        # reply reserve and image budget; never a reported token count.
+                        estimate = sum(len((message.content or "").encode("utf-8")) for message in history)
+                        estimate = (estimate + len(schemas.encode("utf-8"))) // 3 + 4096 + 4096 * len(attachments)
+                        choice = self.route_model(task, require_tools=task == "planning",
+                                                  require_vision=bool(attachments), context_tokens=estimate)
+                        provider_id, model = choice["provider"], choice["model"]
+                    provider = self.make_provider(provider_id)
+                    if getattr(provider, "is_local", False):
+                        provider.model_info(model)
+                    from jarvix.attachments import disclose_images
+                    messages = bounded_history(self.conversation_messages(conversation_id))
+                    images = disclose_images(attachments, provider, model, approve, self.repository)
+                    if images:
+                        messages[-1].images = images
+                        self.records.put("chat_attachment", {"conversation_id": conversation_id,
+                            "images": [image.description() for image in images], "provider": provider_id})
+                    answer = self.orchestrator.run(provider, required_text(model, "Model", 150),
+                            messages, self.enabled_tools(),
+                            approve, on_event, cancel, lambda value: setattr(self, "latest_context", value),
+                            max_rounds=self.settings.get("agent.max_rounds", 6))
+            except ProviderError as exc:
+                self.repository.audit("provider", f"{provider_id}: request failed")
+                answer = str(exc)
+            except InterruptedError:
+                answer = "Request stopped or timed out. Completed actions remain in Activity."
+            finally:
+                if hasattr(provider, "close"):
+                    provider.close()
             self.repository.append_message(conversation_id, "assistant", answer)
             self.repository.audit("chat", f"{provider_id}: conversation updated")
             return answer
@@ -529,11 +692,16 @@ class Services:
             self._automation_lock.release()
 
     def close(self):
+        if hasattr(self, "supervisor"):
+            if not self.supervisor.close():
+                raise RuntimeError("Supervised work is still stopping. Wait before releasing services.")
         if hasattr(self, "background"):
             if not self.background.stop():
                 raise RuntimeError("Background work is still stopping. Wait for shutdown before releasing services.")
         if hasattr(self, "operator"):
             self.operator.close()
+        if hasattr(self, "context"):
+            self.context.clear()
         if hasattr(self, "desktop"):
             self.desktop.cancel()
         self.voice.close()
@@ -543,6 +711,7 @@ class Services:
             self.browser.disconnect()
         if hasattr(self, "microphone"):
             self.microphone.close()
+        if hasattr(self, "wake_word"):
+            self.wake_word.close()
         if hasattr(self, "developer") and hasattr(self.developer, "close"):
             self.developer.close()
-

@@ -189,4 +189,3 @@ class VoiceInputPanel(QWidget):
         if self.wake_panel:
             self.wake_panel.shutdown()
         self.cancel()
-

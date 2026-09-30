@@ -3,10 +3,14 @@ from __future__ import annotations
 
 import calendar
 import json
+import threading
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from jarvix.capabilities.schema import BOOL, ID, array, enum, integer, register, string
+from jarvix.capabilities.memory_intelligence import inspect_matches, relevance
+from jarvix.domain import ToolResult
+from jarvix.runtime import check_cancelled
 from jarvix.services import required_text
 from jarvix.storage import now_iso
 
@@ -253,42 +257,168 @@ class NoteService:
 class MemoryService:
     def __init__(self, s):
         self.s = s
+        self._lock = threading.RLock()
 
-    def edit(self, id, content=None, category=None, source=None, importance=None, expires_at=None):
+    def _scope(self, project_id=None, workspace_id=None):
+        if project_id:
+            row(self.s, "projects", project_id)
+        if workspace_id:
+            self.s.records.get("workspace", workspace_id)
+
+    def _validated(self, meta, **changes):
+        result = dict(meta)
+        for key, value in changes.items():
+            if value is None:
+                continue
+            if key == "expires_at":
+                value = timestamp(value).isoformat() if value else None
+            elif key == "importance":
+                if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 5:
+                    raise ValueError("Importance must be between 1 and 5.")
+            elif key == "source_kind":
+                if value not in {"user", "note", "document", "conversation", "web", "unknown"}:
+                    raise ValueError("Unknown source kind.")
+            elif value:
+                value = required_text(value, key.replace("_", " "), 1000 if key == "source_detail" else 200)
+            result[key] = value
+        self._scope(result.get("project_id"), result.get("workspace_id"))
+        return result
+
+    def _items(self):
+        # Display lists are capped; matching must see older memories and their
+        # scopes too. A join avoids both per-row queries and truncated metadata.
+        current = datetime.now(timezone.utc)
+        with self.s.db.connect() as conn:
+            cursor = conn.execute("SELECT m.*,r.data AS metadata FROM memories m LEFT JOIN records r "
+                                  "ON r.id=m.id AND r.kind='memory.meta' ORDER BY m.created_at DESC,m.id DESC")
+            while batch := cursor.fetchmany(128):
+                for record in batch:
+                    check_cancelled()
+                    memory = dict(record)
+                    meta = json.loads(memory.pop("metadata") or "{}")
+                    item = {**{k: v for k, v in meta.items() if k not in {"id", "created_at", "updated_at"}}, **memory}
+                    item["expired"] = bool(item.get("expires_at") and timestamp(item["expires_at"]) <= current)
+                    yield item
+
+    def _save(self, content, meta, record_id=None):
+        # A fact must never survive a failed scope/provenance write as an
+        # apparently global memory. Both rows commit or roll back together.
+        encoded = json.dumps(meta, ensure_ascii=False, allow_nan=False)
+        if len(encoded) > 250000:
+            raise ValueError("Memory metadata exceeds the local size limit.")
+        stamp = now_iso()
+        with self.s.db.connect() as conn:
+            if record_id is None:
+                record_id = self.s.repository.new_id()
+                conn.execute("INSERT INTO memories VALUES (?,?,?)", (record_id, content, stamp))
+            elif conn.execute("UPDATE memories SET content=? WHERE id=?", (content, record_id)).rowcount != 1:
+                raise ValueError("Memory no longer exists.")
+            conn.execute("INSERT INTO records(id,kind,data,created_at,updated_at) VALUES (?,?,?,?,?) "
+                         "ON CONFLICT(id,kind) DO UPDATE SET data=excluded.data,updated_at=excluded.updated_at",
+                         (record_id, "memory.meta", encoded, stamp, stamp))
+        return record_id
+
+    def check(self, content, project_id=None, workspace_id=None, subject_key=None, exclude_id=None):
+        content = required_text(content, "Memory", 5000)
+        self._scope(project_id, workspace_id)
+        return inspect_matches(content, self._items(), project_id, workspace_id, subject_key, exclude_id)
+
+    def _review(self, content, meta, exclude_id, conflict_policy, review_token):
+        if conflict_policy not in {"reject", "keep_separate"}:
+            raise ValueError("Unknown conflict policy.")
+        preview = self.check(content, meta.get("project_id"), meta.get("workspace_id"),
+                             meta.get("subject_key"), exclude_id)
+        if preview["requires_review"] and (conflict_policy != "keep_separate" or review_token != preview["review_token"]):
+            return ToolResult(False, {**preview, "saved": False}, error=
+                "Review matching memories. Edit an existing memory, or explicitly keep separate with this review token.")
+        return None
+
+    def edit(self, id, content=None, category=None, source=None, importance=None, expires_at=None,
+             project_id=None, workspace_id=None, subject_key=None, source_kind=None, source_detail=None,
+             conflict_policy="reject", review_token=None):
+        with self._lock:
+            return self._edit(id, content, category, source, importance, expires_at, project_id, workspace_id,
+                              subject_key, source_kind, source_detail, conflict_policy, review_token)
+
+    def _edit(self, id, content, category, source, importance, expires_at, project_id, workspace_id,
+              subject_key, source_kind, source_detail, conflict_policy, review_token):
         memory = row(self.s, "memories", id)
-        meta = metadata(self.s, "memory.meta", id)
+        meta = self._validated(metadata(self.s, "memory.meta", id), category=category, source=source,
+                               importance=importance, expires_at=expires_at, project_id=project_id,
+                               workspace_id=workspace_id, subject_key=subject_key, source_kind=source_kind,
+                               source_detail=source_detail)
         if content is not None:
             memory["content"] = required_text(content, "Memory", 5000)
-        if expires_at is not None:
-            meta["expires_at"] = timestamp(expires_at).isoformat() if expires_at else None
-        for key, value in (("category", category), ("source", source), ("importance", importance)):
-            if value is not None:
-                meta[key] = value
-        self.s.db.execute("UPDATE memories SET content=? WHERE id=?", (memory["content"], id))
-        self.s.records.put("memory.meta", meta, id)
+        if any(value is not None for value in (content, project_id, workspace_id, subject_key)):
+            review = self._review(memory["content"], meta, id, conflict_policy, review_token)
+            if review is not None:
+                return review
+        check_cancelled()
+        self._save(memory["content"], meta, id)
+        self.s.repository.audit("memory", "Explicit memory or provenance updated")
         return {"id": id, **meta}
 
-    def remember_sensitive(self, content, category="personal", source="user", importance=3, expires_at=None):
-        if expires_at:
-            timestamp(expires_at)
-        record_id = self.s.add_memory(content)
-        self.edit(record_id, category=category, source=source, importance=importance, expires_at=expires_at)
-        return {"id": record_id}
+    def remember_sensitive(self, content, category="personal", source="user", importance=3, expires_at=None,
+                           project_id=None, workspace_id=None, subject_key=None, source_kind="user",
+                           source_detail=None, conflict_policy="reject", review_token=None):
+        content = required_text(content, "Memory", 5000)
+        meta = self._validated({}, category=category, source=source, importance=importance, expires_at=expires_at,
+                               project_id=project_id, workspace_id=workspace_id, subject_key=subject_key,
+                               source_kind=source_kind, source_detail=source_detail)
+        with self._lock:
+            review = self._review(content, meta, None, conflict_policy, review_token)
+            if review is not None:
+                return review
+            check_cancelled()
+            record_id = self._save(content, meta)
+        self.s.repository.audit("memory", "Explicit memory saved locally")
+        return {"id": record_id, "saved": True, "automatic_cloud_sharing": False}
 
-    def list(self, query="", category=None, include_expired=False):
-        items, current = [], datetime.now(timezone.utc)
-        for memory in self.s.list_memories():
-            item = {**memory, **metadata(self.s, "memory.meta", memory["id"])}
-            if query.casefold() not in memory["content"].casefold():
+    def list(self, query="", category=None, include_expired=False, project_id=None, workspace_id=None):
+        items = []
+        for item in self._items():
+            if query.casefold() not in item["content"].casefold():
                 continue
             if category is not None and item.get("category") != category:
                 continue
-            item["expired"] = bool(item.get("expires_at") and timestamp(item["expires_at"]) <= current)
+            if any(value is not None and item.get(key) != value
+                   for key, value in (("project_id", project_id), ("workspace_id", workspace_id))):
+                continue
             if item["expired"] and not include_expired:
                 continue
             items.append(item)
         items.sort(key=lambda value: -value.get("importance", 3))
         return {"items": items[:50], "truncated": len(items) > 50}
+
+    def relevant(self, query="", project_id=None, workspace_id=None, limit=10):
+        self._scope(project_id, workspace_id)
+        if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 50:
+            raise ValueError("Limit must be between 1 and 50.")
+        items = []
+        for item in self._items():
+            if item["expired"] or any(item.get(key) and item[key] != value
+                                      for key, value in (("project_id", project_id), ("workspace_id", workspace_id))):
+                continue
+            score, reasons, matched = relevance(item, query, project_id, workspace_id)
+            if query.strip() and not matched:
+                continue
+            items.append({**item, "relevance_score": score, "relevance_reasons": reasons})
+        items.sort(key=lambda item: (-item["relevance_score"], item["id"]))
+        return {"items": items[:limit], "truncated": len(items) > limit,
+                "scoring": "Local lexical overlap, explicit scope and importance",
+                "automatic_cloud_sharing": False}
+
+    def explain(self, id):
+        memory = row(self.s, "memories", id)
+        meta = metadata(self.s, "memory.meta", id)
+        expired = bool(meta.get("expires_at") and timestamp(meta["expires_at"]) <= datetime.now(timezone.utc))
+        return {"id": id, "content": memory["content"], "created_at": memory["created_at"],
+                "source": meta.get("source", "Explicit user memory"), "source_kind": meta.get("source_kind", "user"),
+                "source_detail": meta.get("source_detail", "No additional source supplied"),
+                "project_id": meta.get("project_id"), "workspace_id": meta.get("workspace_id"),
+                "subject_key": meta.get("subject_key"), "expires_at": meta.get("expires_at"), "expired": expired,
+                "why_known": "A user-approved explicit memory; provenance is user supplied, not independently verified.",
+                "automatic_cloud_sharing": False}
 
     def delete(self, id):
         row(self.s, "memories", id)
@@ -358,14 +488,24 @@ def setup(s, registry):
     add("notes.restore_version", "Restore a note version; preserve current text in a new snapshot.", {"version_id": ID}, ["version_id"], notes.restore_version, 2)
     add("notes.to_checklist", "Create a Markdown checklist copy, one checkbox per nonempty line.", {"id": ID}, ["id"], notes.checklist, 2)
     add("notes.export", "Export note to a new .md or .txt file in an allowed root. Never overwrite.", {"id": ID, "path": string()}, ["id", "path"], notes.export, 2)
-    memory_props = {"content": string(5000), "category": string(100), "source": string(200), "importance": integer(1, 5), "expires_at": string(40, 0)}
+    memory_scope = {"project_id": string(160, 0), "workspace_id": string(160, 0)}
+    memory_props = {"content": string(5000), "category": string(100), "source": string(200), "importance": integer(1, 5),
+                    "expires_at": string(40, 0), **memory_scope, "subject_key": string(200, 0),
+                    "source_kind": enum("user", "note", "document", "conversation", "web", "unknown"),
+                    "source_detail": string(1000, 0), "conflict_policy": enum("reject", "keep_separate"),
+                    "review_token": string(64)}
     add("memory.edit", "Edit explicit memory content or metadata. Always asks confirmation for potentially sensitive facts.", {"id": ID, **memory_props}, ["id"], memories.edit, 3)
     add("memory.remember_sensitive", "Save user-requested sensitive memory only after immediate confirmation.", memory_props, ["content"], memories.remember_sensitive, 3)
     add("memory.filter", "Find explicit memories by category or text, excluding expired entries by default.",
-        {"query": string(200, 0), "category": string(100), "include_expired": BOOL}, [], memories.list)
+        {"query": string(200, 0), "category": string(100), "include_expired": BOOL, **memory_scope}, [], memories.list)
+    add("memory.check", "Preview duplicate text and conflicting explicit subject keys before saving. Never merges or changes memories.",
+        {"content": string(5000), **memory_scope, "subject_key": string(200, 0), "exclude_id": ID}, ["content"], memories.check)
+    add("memory.relevant", "Rank non-expired memories by local lexical matches and explicit project/workspace scope. Never adds them to AI context automatically.",
+        {"query": string(200, 0), **memory_scope, "limit": integer(1, 50)}, [], memories.relevant)
+    add("memory.explain", "Show why Jarvix knows an explicit memory: its user-supplied source, scope, creation time and expiry.",
+        {"id": ID}, ["id"], memories.explain)
     add("memory.delete", "Permanently remove an explicit memory after confirmation.", {"id": ID}, ["id"], memories.delete, 3)
     add("projects.create", "Register an existing coding/project directory inside allowed roots.", {"name": string(200), "path": string()}, ["name", "path"], projects.create, 2)
     add("projects.update", "Rename, archive/unarchive or link a workspace to a project.",
         {"id": ID, "name": string(200), "archived": BOOL, "workspace_id": string(160, 0)}, ["id"], projects.update, 2)
     add("projects.summary", "Retrieve a project's linked notes, tasks, indexed files and workspace metadata.", {"id": ID}, ["id"], projects.summary)
-

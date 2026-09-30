@@ -99,4 +99,3 @@ class PermissionService:
                             "Send this exact tool result to the selected AI provider for this response.", arguments, preview)))
         self.repository.audit("privacy", f"{spec.name}: cloud disclosure {'allowed' if allowed else 'denied'}")
         return allowed
-

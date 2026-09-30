@@ -100,4 +100,3 @@ def capture_window(handle, process_id, x, y, width, height):
         raise ValueError("The application returned invalid capture dimensions.")
     header = struct.pack("<IiiHHIIiiII", 40, width, height, 1, 32, 0, len(pixels), 0, 0, 0, 0)
     return struct.pack("<2sIHHI", b"BM", 54 + len(pixels), 0, 0, 54) + header + pixels
-

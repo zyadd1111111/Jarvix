@@ -127,9 +127,13 @@ def build_registry(services: Any) -> ToolRegistry:
              lambda a: ToolResult(True, {"id": services.save_note(a["title"], a["body"])}), "notes.write", "write")
     register("memory.search", "Search facts the user explicitly chose to remember.", query_schema,
              lambda a: ToolResult(True, services.productivity.memories.list(query=a.get("query", ""))), "memory.read")
-    register("memory.remember", "Save a fact only when the user asks Jarvix to remember it.",
+    def remember(args):
+        result = services.productivity.memories.remember_sensitive(**args)
+        return result if isinstance(result, ToolResult) else ToolResult(True, result)
+
+    register("memory.remember", "Save a fact only when the user asks Jarvix to remember it; review duplicates or conflicts first.",
              _schema({"content": _string(4000)}, ["content"]),
-             lambda a: ToolResult(True, {"id": services.add_memory(a["content"])}), "memory.write", "write")
+             remember, "memory.write", "write")
     register("tasks.list", "List the user's local tasks and reminder due times.", _schema(),
              lambda a: ToolResult(True, _bounded_records(services.list_tasks(), "", ("id", "title", "status", "due_at", "created_at"))), "tasks.read")
     def create_task(args: dict) -> ToolResult:
@@ -232,4 +236,3 @@ def build_registry(services: Any) -> ToolRegistry:
     register("system.processes", "Show running processes using the most RAM. Does not expose command-line arguments.",
              _schema({"limit": {"type": "integer", "minimum": 1, "maximum": 30}}), processes, "system.read")
     return registry
-

@@ -44,4 +44,3 @@ The initial adapters support text and structured function calls. Streaming, visi
 5. Verify tool cycles, argument validation, authentication errors, bounded payloads and privacy before enabling it.
 
 Tests inject an `httpx.Client` with `MockTransport`. Injection is for controlled tests and trusted hosts; callers supplying a custom client own its lifecycle and any hooks or custom retry transport. Run `python -m pytest tests/test_providers.py` from the project root. Live credential testing must be a separate, explicitly configured operation.
-

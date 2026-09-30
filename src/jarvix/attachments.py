@@ -83,6 +83,9 @@ def disclose_images(paths, provider, model, approve, repository) -> list[ImageAt
     if not getattr(provider, "supports_vision", False):
         raise ProviderError("This provider does not support image attachments.")
     images = prepare_images(paths)
+    if getattr(provider, "is_local", False):
+        repository.audit("privacy", "chat.images: prepared for a local endpoint")
+        return images
     description = {"provider": provider.id, "model": model,
                    "images": [image.description() for image in images],
                    "scope": "This chat request, including its bounded tool follow-ups. Not future requests."}
@@ -108,4 +111,3 @@ def context_message(message):
     if message.images:
         value["images"] = [image.description() for image in message.images]
     return value
-

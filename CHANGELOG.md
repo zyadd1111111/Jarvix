@@ -2,6 +2,19 @@
 
 All notable changes to Jarvix are documented in this file.
 
+## [0.6.0] - Adaptive - 2026-09-30
+
+- Loopback Ollama/OpenAI-compatible providers, discovery, local-only mode and capability-aware task-role routing.
+- Incremental local hybrid search and cited Knowledge Spaces, with live source/root validation and offline keyword fallback.
+- Supervised Operator sessions, progress/dependency graphs, bounded step deadlines, safe handoff and restart recovery.
+- Reviewed declarative extension SDK that preserves the host permission boundary and rejects changed manifests.
+- Workflow variables, structured output references, bounded read-only loops, pinned subflows, templates and write-safe debugging.
+- Guarded app adapters, Explorer context, Windows Search, virtual desktop inspection, opt-in Recent items and confirmed Jarvix startup registration.
+- Optional transactional sensitive-field DPAPI migration with protected future writes and preserved corrupted profiles.
+- Compact knowledge/model/extension UI, routing controls, safer worker shutdown and offline performance checks.
+- Restored existing account connection and optional wake-mode UI; persistent supervision confirmations outlive launch workers.
+- Packaging rejects changing source, checks frozen modules against the checkout and verifies both executables are x64.
+
 ## [0.5.0] - Intelligence - 2026-09-29
 
 - Cited, local PDF/Office/text extraction, bounded pagination, section/table search, extractive summaries/Q&A/comparison and project knowledge collections.

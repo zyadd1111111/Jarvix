@@ -19,7 +19,7 @@ from urllib.parse import quote
 import httpx
 
 from .account_oauth import PROVIDERS, token_request
-from jarvix.runtime import check_cancelled
+from jarvix.runtime import cancel_response, cancellable_lock, check_cancelled
 
 MAX_RESPONSE = 2 * 1024 * 1024
 
@@ -132,6 +132,8 @@ class AccountAdapter:
                 self.save_token(json.dumps(merged, separators=(",", ":")))
             self.token = merged
             self.scopes = str(self.token.get("scope", "")).replace(",", " ").split()
+        except InterruptedError:
+            raise
         except Exception:
             raise AccountError("The account session could not be renewed. Reconnect in Integrations.", needs_auth=True) from None
 
@@ -139,7 +141,7 @@ class AccountAdapter:
                 binary=False, maximum=MAX_RESPONSE):
         if not path.startswith("/") or path.startswith("//") or ".." in path.split("/"):
             raise ValueError("Invalid account API route.")
-        with self.lock:
+        with cancellable_lock(self.lock):
             check_cancelled()
             self._refresh()
             token = self.token.get("access_token")
@@ -159,7 +161,7 @@ class AccountAdapter:
                     kwargs["json"] = body
                 if content is not None:
                     kwargs["content"] = content
-                with client.stream(method, self.base_url + path, **kwargs) as response:
+                with client.stream(method, self.base_url + path, **kwargs) as response, cancel_response(response):
                     if response.status_code == 401:
                         raise AccountError("Account authentication expired or was revoked. Reconnect in Integrations.", needs_auth=True)
                     if response.status_code == 403:
@@ -187,6 +189,7 @@ class AccountAdapter:
             except InterruptedError:
                 raise
             except Exception:
+                check_cancelled()
                 raise AccountError("The account request could not complete. Check the connection and retry.") from None
             finally:
                 if owned:
@@ -456,4 +459,3 @@ class DiscordAdapter(AccountAdapter):
 
 
 ADAPTERS = (GitHubAdapter, GmailAdapter, CalendarAdapter, DriveAdapter, SpotifyAdapter, DiscordAdapter)
-

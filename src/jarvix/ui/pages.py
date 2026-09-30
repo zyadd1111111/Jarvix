@@ -49,8 +49,8 @@ class Page(QWidget):
         self.window = window
         self.services = window.services
         self.layout = QVBoxLayout(self)
-        self.layout.setContentsMargins(30, 25, 30, 25)
-        self.layout.setSpacing(20)
+        self.layout.setContentsMargins(32, 28, 32, 28)
+        self.layout.setSpacing(22)
         heading = QVBoxLayout()
         heading.setSpacing(6)
         heading.addWidget(label(self.title.upper(), "Eyebrow"))
@@ -75,15 +75,15 @@ class HomePage(Page):
         scroll.setWidgetResizable(True)
         body = QWidget()
         self.body_layout = QVBoxLayout(body)
-        self.body_layout.setContentsMargins(0, 0, 6, 0)
-        self.body_layout.setSpacing(18)
+        self.body_layout.setContentsMargins(0, 0, 8, 0)
+        self.body_layout.setSpacing(20)
         scroll.setWidget(body)
         self.layout.addWidget(scroll)
         hero = QFrame()
         hero.setObjectName("Hero")
         hl = QVBoxLayout(hero)
-        hl.setContentsMargins(24, 22, 24, 24)
-        hl.setSpacing(13)
+        hl.setContentsMargins(27, 24, 27, 27)
+        hl.setSpacing(14)
         row = QHBoxLayout()
         words = QVBoxLayout()
         self.greeting = label("", "Heading")
@@ -169,10 +169,14 @@ class HomePage(Page):
             done = sum(step.get("status") in {"completed", "succeeded", "complete"} for step in steps)
             self.operator_layout.addWidget(label(current.get("goal", "Operator task"), wrap=True))
             self.operator_layout.addWidget(label(f"{current.get('status', 'ready').capitalize()} · {done}/{len(steps)} steps", "Accent"))
+            progress = QProgressBar()
+            progress.setValue(int(current.get("progress_percent", 100 * done / max(1, len(steps)))))
+            self.operator_layout.addWidget(progress)
             self.operator_layout.addWidget(button("View timeline and controls", lambda r=current: self.window.open_operator(r["id"]), "Quiet"))
         else:
             self.operator_layout.addWidget(label("Ready for your next task. Plans and progress stay visible here.", "Muted", True))
             self.operator_layout.addWidget(button("Open operator sessions", self.window.open_operator, "Quiet"))
+        self.operator_layout.addWidget(button("Search knowledge & local models", self.window.open_adaptive, "Quiet"))
         tasks = self.services.list_tasks()
         pending = [item for item in tasks if item.get("status") not in ("done", "completed")]
         notes = self.services.list_notes()
@@ -404,7 +408,19 @@ class MemoryPage(Page):
         self.layout.addWidget(intro)
         self.entries = table(["Remembered fact", "Created"])
         self.layout.addWidget(self.entries)
-        self.layout.addWidget(button("Forget selected", self.delete, "Danger"), alignment=Qt.AlignmentFlag.AlignRight)
+        actions = QHBoxLayout()
+        actions.addWidget(button("Why is this remembered?", self.explain, "Quiet"))
+        actions.addWidget(button("Review temporary context", lambda: self.window.open_capabilities("context.session_inspect"), "Quiet"))
+        actions.addStretch()
+        actions.addWidget(button("Forget selected", self.delete, "Danger"))
+        self.layout.addLayout(actions)
+
+    def explain(self):
+        row = selected_record(self.entries)
+        if row:
+            self.window.open_capabilities("memory.explain", {"id": row["id"]})
+        else:
+            self.window.notify("Select a memory to inspect its source, scope and retention.")
 
     def refresh(self):
         fill_table(self.entries, self.services.list_memories(), ["content", lambda row: pretty_date(row.get("created_at"))])
@@ -514,8 +530,23 @@ class FilesPage(Page):
         self.entries = table(["Name", "Location", "Size", "Modified"])
         self.entries.cellDoubleClicked.connect(self.show_file)
         self.layout.addWidget(self.entries, 2)
-        self.layout.addWidget(button("Use selected file as context", self.use_file_context, "Quiet"),
-                              alignment=Qt.AlignmentFlag.AlignRight)
+        document_row = QHBoxLayout()
+        self.document_action = QComboBox()
+        for title, tool in (("Read with citations", "extract"), ("Search document", "search"),
+                            ("Ask document locally", "question"), ("Summarize excerpts", "summarize"),
+                            ("Headings", "sections"), ("Tables and cells", "tables")):
+            self.document_action.addItem(title, tool)
+        document_row.addWidget(self.document_action)
+        document_row.addWidget(button("Inspect selected", self.inspect_document))
+        document_row.addStretch()
+        document_row.addWidget(button("Use as context", self.use_file_context, "Quiet"))
+        self.layout.addLayout(document_row)
+        collection_row = QHBoxLayout()
+        collection_row.addWidget(button("Knowledge collections", lambda: self.window.open_capabilities("knowledge.list"), "Quiet"))
+        collection_row.addWidget(button("Create collection…", self.create_collection, "Quiet"))
+        collection_row.addWidget(button("Compare documents…", self.compare_documents, "Quiet"))
+        collection_row.addStretch()
+        self.layout.addLayout(collection_row)
         project_row = QHBoxLayout()
         project_row.addWidget(label("PROJECTS", "Eyebrow"))
         project_row.addStretch()
@@ -587,6 +618,37 @@ class FilesPage(Page):
         else:
             self.window.select_context(selected_files=[row["path"]])
             self.status.setText("Selected for local context. File contents are shared only after approval.")
+
+    def inspect_document(self):
+        row = selected_record(self.entries)
+        if not row:
+            self.window.notify("Select an indexed document first.")
+            return
+        action = self.document_action.currentData()
+        arguments = {"path": row["path"]}
+        if action in {"search", "question"}:
+            query, accepted = QInputDialog.getText(self, "Local document evidence", "Search words or question")
+            if not accepted or not query.strip():
+                return
+            arguments["query" if action == "search" else "question"] = query.strip()
+        self.window.open_capabilities("documents." + action, arguments)
+
+    def create_collection(self):
+        paths, _ = QFileDialog.getOpenFileNames(self, "Choose documents inside approved folders")
+        if not paths:
+            return
+        name, accepted = QInputDialog.getText(self, "Knowledge collection", "Collection name")
+        if accepted and name.strip():
+            arguments = {"name": name.strip(), "paths": paths}
+            project = selected_record(self.projects)
+            if project:
+                arguments["project_id"] = project["id"]
+            self.window.open_capabilities("knowledge.create", arguments)
+
+    def compare_documents(self):
+        paths, _ = QFileDialog.getOpenFileNames(self, "Choose 2–5 documents inside approved folders")
+        if paths:
+            self.window.open_capabilities("documents.compare", {"paths": paths})
 
     def add_project(self):
         path = QFileDialog.getExistingDirectory(self, "Choose a project folder")
@@ -967,7 +1029,7 @@ class SettingsPage(Page):
         self.layout.addWidget(scroll)
         frame, form = panel("AI defaults")
         self.provider = QComboBox()
-        self.provider.addItems(["openai", "gemini"])
+        self.provider.addItems(["openai", "gemini", "ollama", "local", "auto"])
         self.openai_model = QLineEdit()
         self.gemini_model = QLineEdit()
         for name, widget in (("Default provider", self.provider), ("OpenAI model", self.openai_model), ("Gemini model", self.gemini_model)):
@@ -987,6 +1049,21 @@ class SettingsPage(Page):
         row.addWidget(self.rate)
         form.addLayout(row)
         layout.addWidget(frame)
+        frame, adaptive = panel("Local intelligence & extensions")
+        adaptive.addWidget(label("Configure local model endpoints and task routing, search cited local knowledge, and review declarative extensions.", "Muted", True))
+        adaptive.addWidget(button("Knowledge, search, models & extensions", self.window.open_adaptive))
+        self.local_only = QCheckBox("Local-only AI: block cloud model requests")
+        adaptive.addWidget(self.local_only)
+        self.prefer_local = QCheckBox("Prefer local models when routing automatically")
+        adaptive.addWidget(self.prefer_local)
+        self.routing_cost = QComboBox()
+        self.routing_cost.addItems(["balanced", "low"])
+        self.routing_cost.setToolTip("Unknown provider pricing is never treated as free.")
+        adaptive.addWidget(label("Routing cost preference", "Muted"))
+        adaptive.addWidget(self.routing_cost)
+        adaptive.addWidget(button("Review storage protection", lambda: self.window.open_capabilities("storage.configure_protection")))
+        adaptive.addWidget(button("Windows startup status", lambda: self.window.open_capabilities("windows.startup")))
+        layout.addWidget(frame)
         frame, controls = panel("Computer access & notifications")
         controls.addWidget(label("Sensitive actions always need confirmation immediately before execution. Microphone, screen, and clipboard access are opt-in.", "Muted", True))
         self.access_checks = {}
@@ -997,6 +1074,7 @@ class SettingsPage(Page):
             "notifications.dnd": False, "tray.enabled": False,
             "voice.responses": False,
             "context.enabled": False, "overlay.enabled": False,
+            "windows.recent.enabled": False,
         }
         for key, caption in (
             ("control.enabled", "Allow reversible computer actions without individual prompts"),
@@ -1010,6 +1088,7 @@ class SettingsPage(Page):
             ("voice.responses", "Read AI responses aloud automatically"),
             ("context.enabled", "Allow explicit active-window context requests"),
             ("overlay.enabled", "Enable the global quick-command overlay shortcut"),
+            ("windows.recent.enabled", "Allow explicit Windows Recent file requests inside approved roots"),
         ):
             check = QCheckBox(caption)
             controls.addWidget(check)
@@ -1063,6 +1142,9 @@ class SettingsPage(Page):
 
     def refresh(self):
         settings = self.services.settings
+        self.local_only.setChecked(settings.get("ai.local_only", False))
+        self.prefer_local.setChecked(settings.get("routing.prefer_local", True))
+        self.routing_cost.setCurrentText(settings.get("routing.cost_preference", "balanced"))
         self.provider.setCurrentText(settings.get("provider", "openai"))
         self.openai_model.setText(settings.get("model.openai", "gpt-4.1-mini"))
         self.gemini_model.setText(settings.get("model.gemini", "gemini-2.5-flash"))
@@ -1117,6 +1199,9 @@ class SettingsPage(Page):
             self.window.notify("Both model identifiers are required.")
             return
         def persist():
+            self.services.settings.set("ai.local_only", self.local_only.isChecked())
+            self.services.settings.set("routing.prefer_local", self.prefer_local.isChecked())
+            self.services.settings.set("routing.cost_preference", self.routing_cost.currentText())
             for key, value in (("provider", self.provider.currentText()), ("model.openai", self.openai_model.text().strip()), ("model.gemini", self.gemini_model.text().strip()), ("speech.rate", self.rate.value()), ("tools.enabled", [name for name, check in self.tool_checks.items() if check.isChecked()])):
                 self.services.settings.set(key, value)
             for key, check in self.access_checks.items():
@@ -1125,9 +1210,16 @@ class SettingsPage(Page):
             self.services.settings.set("overlay.hotkey", self.overlay_hotkey.currentText())
             if not self.access_checks["microphone.enabled"].isChecked():
                 self.window.pages["Voice"].input_panel.cancel()
+            if not self.access_checks["context.enabled"].isChecked():
+                self.services.context.clear()
+                overlay = self.window.overlay
+                overlay.context_generation += 1
+                overlay.context_snapshot = None
+                overlay.share_context.setChecked(False)
+                overlay.share_context.setEnabled(False)
+                overlay.context.setText("Context access is disabled.")
         if self.guard(persist):
             self.window.update_status()
             self.window.configure_overlay()
             self.window.pages["Chat"].reload_provider()
             self.window.notify("Settings saved locally.")
-

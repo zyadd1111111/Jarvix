@@ -162,4 +162,3 @@ class VoiceService:
         with self._lock:
             self._closed = True
         self.stop()
-

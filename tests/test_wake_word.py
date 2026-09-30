@@ -173,4 +173,3 @@ def test_bad_device_cannot_emit_private_exception_details(wake, model, monkeypat
     wait(lambda: not wake.state()["busy"])
     assert "private hardware secret" not in wake.state()["status"]
     assert not wake.state()["active"]
-

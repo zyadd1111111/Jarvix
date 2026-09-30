@@ -104,4 +104,3 @@ class BackgroundRuntime:
                 return {"workflows": workflows, "reminders": reminders}
         finally:
             self._tick_lock.release()
-

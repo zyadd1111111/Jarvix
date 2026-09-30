@@ -6,6 +6,16 @@ PARALLEL_READS = frozenset({"tasks.list", "notes.search", "memory.search", "proj
                             "files.folder_summary", "files.preview"})
 
 
+def graph(plan, retained=()):
+    """Public dependency edges and ranks, with no arguments or private results."""
+    depths = dict.fromkeys(retained, 0)
+    for step in plan["steps"]:
+        depths[step["id"]] = 1 + max((depths.get(dep, -1) for dep in step.get("depends_on", [])), default=-1)
+    return {"nodes": [{"id": name, "tool": "retained result", "rank": 0} for name in retained]
+            + [{"id": step["id"], "tool": step["tool"], "rank": depths[step["id"]]} for step in plan["steps"]],
+            "edges": [{"from": dep, "to": step["id"]} for step in plan["steps"] for dep in step.get("depends_on", [])]}
+
+
 def references(value):
     if isinstance(value, dict):
         if "$ref" in value and isinstance(value["$ref"], str):
@@ -66,4 +76,3 @@ def batches(plan, registry, seed=()):
         for step in batch:
             pending.remove(step)
             done.add(step["id"])
-

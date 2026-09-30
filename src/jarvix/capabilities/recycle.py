@@ -153,4 +153,3 @@ def setup(s, registry):
              props, ("ids",), service.preview)
     register(registry, "files.restore", "Restore selected Jarvix-recycled items to approved original paths; never overwrite; verify contents.",
              props, ("ids",), service.restore, 2, "computer.control")
-

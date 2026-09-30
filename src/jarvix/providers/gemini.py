@@ -14,9 +14,14 @@ from jarvix.providers._transport import MAX_OUTPUT_TOKENS, MAX_TOOL_CALLS, Trans
 class GeminiProvider:
     id = "gemini"
     supports_vision = True
+    supports_tools = True
+    is_local = False
 
     def __init__(self, api_key: str, client: httpx.Client | None = None) -> None:
         self._transport = Transport(api_key, client)
+
+    def close(self) -> None:
+        """Transport closes each owned request; injected clients remain caller-owned."""
 
     def complete(self, messages: list[Message], tools: list[ToolSpec], model: str) -> Completion:
         model = validate_model(model)
@@ -191,4 +196,3 @@ class GeminiProvider:
         if system:
             payload["systemInstruction"] = {"parts": system}
         return payload
-

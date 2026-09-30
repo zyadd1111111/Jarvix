@@ -209,4 +209,3 @@ def test_new_file_tool_schemas_are_strict_and_recycle_is_sensitive(services):
     assert services.registry.get("files.open_folder").permission_level == 2
     assert services.registry.validate("files.copy", {"source": "x", "destination": "y", "overwrite": True})
     assert services.registry.validate("files.batch_rename", {"paths": ["x"] * 101})
-

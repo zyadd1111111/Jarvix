@@ -12,4 +12,3 @@ Remove-Item -LiteralPath $archive -Force -ErrorAction SilentlyContinue
 Compress-Archive -Path (Join-Path $staging '*') -DestinationPath $archive -Force
 Remove-Item -LiteralPath $staging -Recurse -Force
 Write-Host "Source archive: $archive"
-

@@ -220,4 +220,3 @@ class SpeechInputService:
         self.cancel()
         if self._thread and self._thread is not threading.current_thread():
             self._thread.join(timeout=2)
-

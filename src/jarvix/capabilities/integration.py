@@ -294,4 +294,3 @@ def setup(s, registry):
              s.integrations.disconnect, 3, "integration.credentials")
     from .account_tools import register_accounts
     register_accounts(s, registry)
-

@@ -1,30 +1,22 @@
-# Jarvix 0.3 — Operator verification
+# Jarvix 0.6 — Adaptive verification
 
-Checkpoint completed September 27, 2026. Windows 10 x64, Python 3.11.0,
-PySide6 6.11.2 and PyInstaller 6.22.3. Existing architecture and tests preserved.
+September 30, 2026 · Windows x64 · Python 3.11 · PySide6.
 
-- **396 tests passed, 1 opt-in native test skipped** in the full suite (115.34 seconds).
-  Saved evidence: `artifacts/operator-0.3-tests.log` and `operator-0.3-tests.xml`.
-- The skipped Windows integration test **passed separately** with explicit opt-in.
-  It creates its own Qt windows and checks real UIA typing/invocation, stale identity
-  rejection, password protection, isolated capture under occlusion and local en-US OCR.
-- **Ruff and dependency validation passed.** Read-only native system, app and window
-  checks passed; disabled clipboard/screen gates rejected access.
-- Coverage includes permissions, file roots, structured plans/references, loop detection,
-  postconditions, safe retries, session persistence, undo conflicts, workflow branches,
-  scheduling, cancellation isolation, shutdown and live UI controls. Mocked provider
-  flows cover natural-language automation proposals and fresh save confirmation.
-- **223 registered tools.** All 54 packaged Jarvix Python modules match current source.
-- Windows executable, portable ZIP and Python wheel built successfully. Packaged
-  startup rendered Home using an isolated profile and exited with code 0. Home and
-  the workflow builder were visually checked; the builder also shut down cleanly.
+- Full regression suite: **590 passed, 1 optional native test skipped** in 277.78 seconds.
+- Ruff and dependency checks pass. No paid AI requests or live account API calls were used in tests.
+- Both packaged executables are x64; **84 frozen application modules match source**. The build rejects source changes during verification/packaging.
+- Packaged desktop startup and browser-helper framing pass using an isolated profile. Home was visually inspected.
+- Focused coverage includes local providers, routing, offline/hybrid search, source/root/account revalidation, Knowledge Spaces, manifest permissions, supervision, restart recovery, deadlines, detached confirmation ownership, workflow references/subflows, undo and DPAPI migration/rollback.
+- Offline synthetic profile: facade startup **685 ms**, UI shell **330 ms**, read 100 notes **1.96 ms**, index 100 notes **1,155 ms**, unchanged refresh **17.79 ms**, keyword query **17.53 ms**. These are local measurements, not performance guarantees.
 
-Artifacts: `dist/Jarvix/Jarvix.exe`, `dist/Jarvix-0.3.0-windows-x64.zip`, and
-`dist/jarvix-0.3.0-py3-none-any.whl`. This is an unsigned local build, not a published release.
+Build evidence: `artifacts/adaptive-build.log`. Reproduce with `scripts/build.ps1`; use `scripts/profile_local.py` for disposable offline timings.
 
-Live paid-model calls, actual microphone recognition and external account APIs remain
-unverified. Native control depends on each application's accessibility support; OCR
-needs an installed Windows language. Scheduling requires Jarvix to remain running.
-Other deliberate limits are in README and OPERATOR-CHECKPOINT; permissions and data
-boundaries are in SECURITY.md. No unrelated user windows were captured by native tests.
+Outputs: `dist/Jarvix/Jarvix.exe`, `dist/Jarvix/JarvixBrowserHost.exe`, `dist/Jarvix-0.6.0-windows-x64.zip` and `dist/jarvix-0.6.0-py3-none-any.whl`.
+These are unsigned local artifacts. Building does not publish a GitHub release.
+
+Live accounts, browser peers, local inference/embeddings, microphone/wake models and app-specific behavior still require configuration and live verification. Optional sherpa-onnx/model files are not bundled in the default portable build. Generic local endpoints without capability metadata cannot be selected automatically for unknown capabilities. Loopback transport cannot prove a separately configured inference server never proxies cloud requests.
+
+Knowledge Q&A/summaries are cited extracts; Drive knowledge contains explicitly imported metadata. Replacing weights under the same embedding model tag requires a forced rebuild. SDK v1 composes reviewed host tools rather than loading arbitrary plugin code; restart refreshes AI catalog families after adding aliases.
+
+DPAPI protects selected sensitive fields, not the entire database. Pre-existing backups keep their original policy. Completed side effects remain until a supported inverse is explicitly requested; uncertain writes are not silently replayed.
 

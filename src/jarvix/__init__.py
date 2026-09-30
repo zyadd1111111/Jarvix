@@ -1,4 +1,3 @@
 """Jarvix: a local-first personal AI command center."""
 
-__version__ = "0.3.0"
-
+__version__ = "0.6.0"

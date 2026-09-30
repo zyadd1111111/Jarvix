@@ -45,7 +45,9 @@ PRAGMA user_version = 1;
 
 
 class Database:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, codec=None):
+        from jarvix.capabilities.checkpoints import protect
+        self.codec = codec or protect
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.connect() as conn:
@@ -105,11 +107,14 @@ class Database:
 
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:
-        conn = sqlite3.connect(self.path, timeout=10)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys=ON")
-        conn.execute("PRAGMA busy_timeout=10000")
+        from jarvix.data_protection import ProtectedConnection
+        conn = sqlite3.connect(self.path, timeout=10, factory=ProtectedConnection)
         try:
+            conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA foreign_keys=ON")
+            conn.execute("PRAGMA busy_timeout=10000")
+            if conn.execute("SELECT 1 FROM sqlite_master WHERE name='settings'").fetchone():
+                conn.initialize(self.codec)
             yield conn
             conn.commit()
         except BaseException:
@@ -217,4 +222,3 @@ class Repository:
     @staticmethod
     def new_id() -> str:
         return uuid.uuid4().hex
-

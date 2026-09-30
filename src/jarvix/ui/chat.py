@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
 )
 
 from .pages import Page, pretty_date
-from .widgets import label, button, Composer, ChatJob, SignalOrb, clear_layout, TextPreview
+from .widgets import label, button, Composer, ChatJob, SignalOrb, clear_layout, TextPreview, evidence_text
 
 
 class ImageComposer(Composer):
@@ -162,12 +162,21 @@ class ChatPage(Page):
         self.provider = QComboBox()
         self.provider.addItem("OpenAI", "openai")
         self.provider.addItem("Gemini", "gemini")
+        self.provider.addItem("Ollama · local", "ollama")
+        self.provider.addItem("Local endpoint", "local")
+        self.provider.addItem("Automatic routing", "auto")
         self.provider.currentIndexChanged.connect(self.change_provider)
         self.model = QLineEdit()
         self.model.setPlaceholderText("Model identifier")
         self.model.setMaximumWidth(230)
         toolbar.addWidget(self.provider)
         toolbar.addWidget(self.model)
+        self.task_role = QComboBox()
+        self.task_role.addItems(["chat", "planning", "summarization"])
+        self.task_role.setToolTip("Automatic routing uses this task role; an explicitly selected provider/model overrides routing.")
+        self.task_role.setCurrentText(self.services.settings.get("chat.role", "chat"))
+        self.task_role.currentTextChanged.connect(lambda value: self.services.settings.set("chat.role", value))
+        toolbar.addWidget(self.task_role)
         toolbar.addStretch()
         toolbar.addWidget(button("Context", self.inspect_context, "Quiet"))
         toolbar.addWidget(button("Retry / regenerate", self.regenerate, "Quiet"))
@@ -229,19 +238,26 @@ class ChatPage(Page):
         self.provider.blockSignals(True)
         self.provider.setCurrentIndex(max(0, self.provider.findData(current)))
         self.provider.blockSignals(False)
-        self.model.setText(self.services.settings.get("model." + current, "gpt-4.1-mini" if current == "openai" else "gemini-2.5-flash"))
+        from jarvix.providers import DEFAULT_MODELS
+        self.model.setText(self.services.settings.get("model." + current, DEFAULT_MODELS.get(current, "")))
+        self.model.setPlaceholderText("Selected by task routing" if current == "auto" else "Model identifier")
         self.update_connection()
 
     def change_provider(self):
         provider_id = self.provider.currentData()
         self.services.settings.set("provider", provider_id)
-        self.model.setText(self.services.settings.get("model." + provider_id, "gpt-4.1-mini" if provider_id == "openai" else "gemini-2.5-flash"))
+        from jarvix.providers import DEFAULT_MODELS
+        self.model.setText(self.services.settings.get("model." + provider_id, DEFAULT_MODELS.get(provider_id, "")))
         self.update_connection()
         self.window.update_status()
 
     def update_connection(self):
         ready = self.services.provider_status().get(self.provider.currentData(), False)
-        self.connection.setText("● Key configured" if ready else "○ Add an API key in Integrations")
+        provider_id = self.provider.currentData()
+        local = provider_id in {"ollama", "local"}
+        self.connection.setText(("● Local endpoint configured" if ready else "○ Select a local model in Knowledge & Models")
+                                if local else "Automatic · inspect task routing" if provider_id == "auto"
+                                else "● Key configured" if ready else "○ Add an API key in Integrations")
 
     def refresh(self):
         self.refresh_history()
@@ -485,7 +501,7 @@ class ChatPage(Page):
             text = "Describe these attached images."
         if not text:
             return
-        if not model:
+        if not model and self.provider.currentData() != "auto":
             self.window.notify("Choose a model identifier before sending.")
             return
         if not self.conversation_id:
@@ -578,6 +594,11 @@ class ChatPage(Page):
         layout.addLayout(summary, 1)
         layout.addStretch()
         layout.addWidget(button("View", lambda: self.inspect_event(item), "Quiet"))
+        cited = evidence_text(value)
+        if cited:
+            layout.addWidget(button("Sources", lambda: TextPreview(
+                "Cited source excerpts", "Local tool evidence; this view does not send it to a provider.",
+                cited, self).exec(), "Quiet"))
         if result.get("ok", True) and value.get("undo_id"):
             layout.addWidget(button("Undo", lambda: self.window.open_capabilities(
                 "actions.undo", {"id": value["undo_id"]}), "Quiet"))
@@ -587,7 +608,7 @@ class ChatPage(Page):
         if result.get("ok", True) and name in {"files.move", "files.rename", "files.copy"} and value.get("path"):
             layout.addWidget(button("Reveal", lambda: self.window.open_capabilities(
                 "files.reveal", {"path": value["path"]}), "Quiet"))
-        if name in {"operator.run", "operator.retry"} and value.get("id"):
+        if name in {"operator.run", "operator.retry", "operator.replan"} and value.get("id"):
             layout.addWidget(button("Session", lambda: self.window.open_operator(value["id"]), "Quiet"))
         elif name == "notes.create" and value.get("id"):
             layout.addWidget(button("Open", lambda: self.window.open_note(value["id"]), "Quiet"))
@@ -683,4 +704,3 @@ class ChatPage(Page):
     def inspect_context(self):
         preview = self.services.context_preview(self.conversation_id, self.provider.currentData(), self.model.text().strip())
         TextPreview("AI context preview", "Conversation context and enabled tools for the next request. Your unsent draft is not included in this preview.", json.dumps(preview, indent=2, ensure_ascii=False, default=str), self).exec()
-
