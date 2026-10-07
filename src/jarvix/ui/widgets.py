@@ -5,8 +5,8 @@ import threading
 from typing import Any, Callable
 import json
 
-from PySide6.QtCore import Qt, QThread, Signal
-from PySide6.QtGui import QColor, QPainter, QPen, QRadialGradient
+from PySide6.QtCore import Qt, QThread, Signal, QSize
+from PySide6.QtGui import QPainter
 from PySide6.QtWidgets import (
     QWidget, QLabel, QFrame, QPushButton, QVBoxLayout, QPlainTextEdit, QDialog, QDialogButtonBox, QTableWidget, QHeaderView,
     QAbstractItemView,
@@ -27,8 +27,21 @@ def button(text: str, callback: Callable | None = None, style: str = "") -> QPus
     if style:
         widget.setObjectName(style)
     widget.setCursor(Qt.CursorShape.PointingHandCursor)
+    widget.setAccessibleName(text)
+    widget.setToolTip(text)
     if callback:
         widget.clicked.connect(lambda _checked=False: callback())
+    return widget
+
+
+def icon_button(name, description, callback=None):
+    from .icons import icon
+    widget = button("", callback, "Quiet")
+    widget.setIcon(icon(name))
+    widget.setIconSize(QSize(18, 18))
+    widget.setAccessibleName(description)
+    widget.setToolTip(description)
+    widget.setFixedWidth(34)
     return widget
 
 
@@ -36,8 +49,8 @@ def panel(title: str = "") -> tuple[QFrame, QVBoxLayout]:
     frame = QFrame()
     frame.setObjectName("Panel")
     layout = QVBoxLayout(frame)
-    layout.setContentsMargins(21, 18, 21, 20)
-    layout.setSpacing(14)
+    layout.setContentsMargins(12, 10, 12, 10)
+    layout.setSpacing(8)
     if title:
         layout.addWidget(label(title, "Heading"))
     return frame, layout
@@ -47,9 +60,14 @@ def clear_layout(layout) -> None:
     while layout.count():
         item = layout.takeAt(0)
         if item.widget():
+            item.widget().hide()
             item.widget().deleteLater()
         elif item.layout():
-            clear_layout(item.layout())
+            child = item.layout()
+            # takeAt transfers ownership to Python; keep deletion on the GUI thread.
+            child.setParent(layout)
+            clear_layout(child)
+            child.deleteLater()
 
 
 def table(headers: list[str]) -> QTableWidget:
@@ -57,12 +75,13 @@ def table(headers: list[str]) -> QTableWidget:
     result.setHorizontalHeaderLabels(headers)
     result.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
     result.verticalHeader().hide()
-    result.verticalHeader().setDefaultSectionSize(44)
+    result.verticalHeader().setDefaultSectionSize(32)
     result.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
     result.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
     result.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
     result.setShowGrid(False)
     result.setAlternatingRowColors(True)
+    result.setAccessibleName(" / ".join(headers))
     return result
 
 
@@ -85,34 +104,16 @@ def evidence_text(value):
 
 
 class SignalOrb(QWidget):
-    """A restrained glassy identity mark used for Jarvix's ambient presence."""
+    """Compatibility identity widget using the same flat SVG family as controls."""
 
     def __init__(self, size=70, parent=None):
         super().__init__(parent)
         self.setFixedSize(size, size)
 
     def paintEvent(self, event):
+        from .icons import icon
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        center = self.rect().center()
-        radius = min(self.width(), self.height()) * .44
-        gradient = QRadialGradient(center, radius)
-        gradient.setColorAt(0, QColor(124, 231, 255, 92))
-        gradient.setColorAt(.28, QColor(77, 166, 235, 48))
-        gradient.setColorAt(.68, QColor(105, 105, 224, 23))
-        gradient.setColorAt(1, QColor(14, 20, 32, 0))
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(gradient)
-        painter.drawEllipse(center, radius, radius)
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        for factor, color, width in ((.78, "#426788", 1.0), (.56, "#6fc8ec", 1.1), (.31, "#c4f4ff", 1.35)):
-            painter.setPen(QPen(QColor(color), width))
-            painter.drawEllipse(center, radius * factor, radius * factor)
-        painter.setPen(QPen(QColor("#d7fbff"), 1.2))
-        painter.drawLine(center.x() - radius * .96, center.y(), center.x() - radius * .62, center.y())
-        painter.drawLine(center.x() + radius * .62, center.y(), center.x() + radius * .96, center.y())
-        painter.drawLine(center.x(), center.y() - radius * .96, center.x(), center.y() - radius * .62)
-        painter.drawLine(center.x(), center.y() + radius * .62, center.x(), center.y() + radius * .96)
+        icon("activity").paint(painter, self.rect())
 
 
 class Job(QThread):

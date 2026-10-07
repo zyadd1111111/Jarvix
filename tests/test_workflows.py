@@ -313,6 +313,48 @@ def test_nested_run_preserves_parent_pause_and_cancellation(services):
         worker.join(3)
 
 
+def test_child_cancel_interrupts_inherited_parent_pause(services):
+    reached = Mock(return_value=ToolResult(True))
+    services.registry.register(ToolSpec("test.after", "After", {"type": "object"}, permission_level=1), reached)
+    child = services.workflows.save("Child", [{"kind": "delay", "seconds": .1}, action("test.after")])["id"]
+    parent = services.workflows.save("Parent", [action("workflows.run", {"id": child})])["id"]
+    services.settings.set("control.enabled", True)
+    paused, child_stopped = threading.Event(), threading.Event()
+    runs, outcome = {}, []
+
+    def event(kind, data):
+        if kind != "workflow":
+            return
+        runs[data["workflow_id"]] = data["run_id"]
+        if data["workflow_id"] == child and data["status"] == "running" and data["steps"]:
+            services.workflows.pause(runs[parent])
+        if data["workflow_id"] == parent and data["status"] == "paused":
+            paused.set()
+        if data["workflow_id"] == child and data["status"] == "cancelled":
+            child_stopped.set()
+
+    def run():
+        with operation(approve=lambda _: True):
+            outcome.append(services.workflows.run(parent, on_event=event))
+
+    worker = threading.Thread(target=run)
+    worker.start()
+    try:
+        assert paused.wait(3)
+        services.workflows.cancel(runs[child])
+        assert child_stopped.wait(3)
+        assert services.workflows.history(child)[0]["status"] == "cancelled"
+        assert services.workflows.history(parent)[0]["status"] == "paused"
+        services.workflows.resume(runs[parent])
+        worker.join(3)
+        assert not worker.is_alive()
+        assert outcome[0]["status"] == "failed"
+        reached.assert_not_called()
+    finally:
+        services.workflows.close()
+        worker.join(3)
+
+
 def test_supported_hotkey_is_canonical_and_routes_only_enabled_workflows(services):
     assert WORKFLOW_HOTKEYS["Ctrl+Alt+F12"] == (0x0003, 0x7B)
     saved = services.workflows.save("Shortcut", [action()], "hotkey",

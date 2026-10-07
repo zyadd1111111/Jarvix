@@ -2,6 +2,43 @@
 
 All notable changes to Jarvix are documented in this file.
 
+## [0.9.0] - 2026-10-05
+
+- Rebuilt presentation with neutral design tokens, Segoe UI Variable, consistent SVG icons and grouped collapsible navigation.
+- Main-window Operator, Missions, Knowledge and Skills workspaces; dedicated project rows and inspectors reuse existing actions.
+- Command-focused Home, document-style Chat, compact tool results and category-based Settings.
+- Sortable Files and process tables, native context menus, restrained workflow blocks, account rows and accessible dialogs.
+- Existing backend, storage schema, provider execution and permission enforcement remain unchanged.
+
+## [0.8.0] - Continuum - 2026-10-02
+
+- Explicit personal context profiles persist references and memory pins, with access/scope/expiry checks and manual activation.
+- Linked work checkpoints survive restart and preview current project observations and protected Operator recovery.
+- Reviewed literal skills reuse verified sessions or manual routines, with fresh confirmation, recipe fingerprints and recorded usage.
+- Owned background continuation uses existing safe metadata reads, deadlines and cancellation; uncertain writes are never replayed.
+- Home/palette saved-work views, Operator learning/progress shortcuts and exact recipe approval previews.
+- Source permission/enablement revalidation, including changes made during approval.
+- Expiring structured Session Memory with explicit project/permanent promotion; linked checkpoints now include tasks, notes, Knowledge Spaces and apps.
+- Skill edit/duplicate, metadata/versioning, test mode, reviewed import/export, explicit workflow proposals and bounded local pattern suggestions.
+- Mission milestones/deadlines, linked Skills and calculated progress; graph relationship provenance, confidence, type and scope.
+- Saved execution evaluation and routing profiles, including immediate local-only enforcement between provider rounds.
+- Optional source-approved daily brief, notification grouping/snooze/category muting and related-work previews.
+- On-demand diagnostics, bounded checksum-verified backups, approved backup schedules and isolated restore profiles with unattended work disabled.
+- Explicit vault-backed device pairing and encrypted signed offline envelopes with expiry, revocation and replay protection; no remote execution.
+- Developer release checklist and owned command verification; manual public release inspection and artifact checksum verification without installation.
+- Asynchronous source-permissioned Knowledge/extension inspection; compact brief, health, evaluation, backup, device and update views.
+
+## [0.7.0] - Fusion - 2026-10-01
+
+- Project continuation previews and bounded specialist read handoffs reuse existing registered tools.
+- Persistent Missions track linked work, progress and blockers without replaying actions on resume.
+- Explicit local Context Graph with access revalidation and unverified external references.
+- Compatible model fallback chains, Coding/Document Analysis roles, latency/failure metrics and fresh cloud disclosure.
+- Optional local suggestions with reasons, persistent dismissal and category muting; off by default.
+- Stronger app adapter dispatch and honest editor/browser/Explorer/owned-terminal context.
+- Mission/suggestion UI, command-palette entry points and Chat model selection indicators.
+- Fixed child workflow cancellation while its parent is paused.
+
 ## [0.6.0] - Adaptive - 2026-09-30
 
 - Loopback Ollama/OpenAI-compatible providers, discovery, local-only mode and capability-aware task-role routing.

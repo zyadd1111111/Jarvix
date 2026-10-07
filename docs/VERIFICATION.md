@@ -1,22 +1,17 @@
-# Jarvix 0.6 — Adaptive verification
+# Jarvix 0.9 verification
 
-September 30, 2026 · Windows x64 · Python 3.11 · PySide6.
+October 7, 2026 · Windows x64 · Python 3.11 · PySide6.
 
-- Full regression suite: **590 passed, 1 optional native test skipped** in 277.78 seconds.
-- Ruff and dependency checks pass. No paid AI requests or live account API calls were used in tests.
-- Both packaged executables are x64; **84 frozen application modules match source**. The build rejects source changes during verification/packaging.
-- Packaged desktop startup and browser-helper framing pass using an isolated profile. Home was visually inspected.
-- Focused coverage includes local providers, routing, offline/hybrid search, source/root/account revalidation, Knowledge Spaces, manifest permissions, supervision, restart recovery, deadlines, detached confirmation ownership, workflow references/subflows, undo and DPAPI migration/rollback.
-- Offline synthetic profile: facade startup **685 ms**, UI shell **330 ms**, read 100 notes **1.96 ms**, index 100 notes **1,155 ms**, unchanged refresh **17.79 ms**, keyword query **17.53 ms**. These are local measurements, not performance guarantees.
+- Legacy remains the default. Settings → Appearance → Interface persists Legacy/Nexus for the next launch, preserving current drafts and workers. Nexus styling stays scoped to its window; both presentations use the existing services and local profile.
+- All **80 baseline backend modules are unchanged**. Existing UI changes are limited to the Interface setting and presentation-constructor hooks; the Legacy theme and page implementations are retained.
+- Full regression: **779 passed, 1 optional native test skipped** in 745.11 seconds. Ruff and dependency checks pass. Focused checks cover interface persistence, draft preservation, window-scoped styles, controller ownership, real action routes, knowledge permissions, material caching and default-deny confirmations.
+- Reviewed 165 Nexus captures across **15 populated/empty profiles**, including Home, Chat, Operator, Missions, Knowledge, Files, Automations, Integrations, System, Settings and Appearance. Tested 860×600, 1280×840, 1920×1080 and 2560×1440 layouts at 100–200% scaling, including 3840×2160 output. All 15 Legacy before/after comparisons are pixel-identical.
+- Native Windows review confirmed dropdown arrows, checked indicators and the Qt material fallback. The test host exposes one physical 1920×1080 monitor; the broader DPI/resolution matrix uses isolated offscreen renders. Native Mica/Acrylic and physical multi-monitor behavior were not verified on this host.
+- Native offline profiling measured 1.74-second startup, 228 MB resident memory, 0% single-core idle CPU over the two-second sample, and 77.51 ms average resize plus forced capture. Blur is cached per desktop canvas; painting never reads settings or captures other applications. These are one-host measurements, not performance guarantees.
+- Both executables are x64, all **109 frozen application modules match source**, and the browser helper passes its framed-input check without changing registration. Fresh packaged Legacy, Nexus and Nexus Settings launches all exit successfully using the native Windows Qt platform. The packaged Nexus Home and Settings screens were visually inspected.
 
-Build evidence: `artifacts/adaptive-build.log`. Reproduce with `scripts/build.ps1`; use `scripts/profile_local.py` for disposable offline timings.
+Full regression and package results are recorded in `artifacts/nexus-build.log`; visual/profile results are in `artifacts/nexus-matrix.log`, `artifacts/nexus/performance-windows.json` and `artifacts/nexus-package-results.json`. The build rejects application source changes during verification and compares frozen modules with source.
 
-Outputs: `dist/Jarvix/Jarvix.exe`, `dist/Jarvix/JarvixBrowserHost.exe`, `dist/Jarvix-0.6.0-windows-x64.zip` and `dist/jarvix-0.6.0-py3-none-any.whl`.
-These are unsigned local artifacts. Building does not publish a GitHub release.
+Reproduce renders with `python scripts/review_nexus.py --matrix` and profiling with `python scripts/profile_nexus.py`; both use isolated offline profiles. Reproduce packaging with `scripts/build.ps1`.
 
-Live accounts, browser peers, local inference/embeddings, microphone/wake models and app-specific behavior still require configuration and live verification. Optional sherpa-onnx/model files are not bundled in the default portable build. Generic local endpoints without capability metadata cannot be selected automatically for unknown capabilities. Loopback transport cannot prove a separately configured inference server never proxies cloud requests.
-
-Knowledge Q&A/summaries are cited extracts; Drive knowledge contains explicitly imported metadata. Replacing weights under the same embedding model tag requires a forced rebuild. SDK v1 composes reviewed host tools rather than loading arbitrary plugin code; restart refreshes AI catalog families after adding aliases.
-
-DPAPI protects selected sensitive fields, not the entire database. Pre-existing backups keep their original policy. Completed side effects remain until a supported inverse is explicitly requested; uncertain writes are not silently replayed.
-
+Outputs: `dist/Jarvix/Jarvix.exe`, `dist/Jarvix/JarvixBrowserHost.exe`, `dist/Jarvix-0.9.0-windows-x64.zip` and `dist/jarvix-0.9.0-py3-none-any.whl`. These are unsigned local artifacts. Building does not publish a GitHub release.

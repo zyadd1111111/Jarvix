@@ -8,6 +8,8 @@ import subprocess
 import threading
 import time
 import uuid
+import json
+import tomllib
 from collections import Counter
 from pathlib import Path
 
@@ -406,6 +408,69 @@ class DeveloperService:
         for session in list(self.sessions.values()):
             session.stop("application_closed")
 
+    def release_checklist(self, path, test_session_id=None, build_session_id=None):
+        root = self._project(path)
+        def read(name, arguments):
+            if name not in self.services.enabled_tools():
+                raise PermissionError("This release source is disabled.")
+            return self.services.execute_tool(name, arguments)
+        checks, version = [], None
+        for filename in ("pyproject.toml", "package.json", "README.md", "CHANGELOG.md"):
+            target = root / filename
+            if not target.exists():
+                checks.append({"item": filename, "status": "missing"})
+                continue
+            result = read("files.read_text", {"path": str(target), "max_chars": 16000})
+            if not result.ok:
+                checks.append({"item": filename, "status": "unavailable"})
+                continue
+            text = result.data["text"]
+            checks.append({"item": filename, "status": "present" if text.strip() else "empty",
+                           "truncated": result.data.get("truncated", False)})
+            try:
+                if filename == "pyproject.toml":
+                    version = tomllib.loads(text).get("project", {}).get("version") or version
+                elif filename == "package.json":
+                    version = json.loads(text).get("version") or version
+            except (ValueError, TypeError):
+                checks[-1]["status"] = "invalid_manifest"
+        git = read("developer.git_status", {"path": str(root)})
+        for label, session_id in (("Tests", test_session_id), ("Build", build_session_id)):
+            result = read("developer.command_output", {"session_id": session_id}) if session_id else None
+            verified = bool(result and result.ok and not result.data["running"] and result.data["exit_code"] == 0
+                            and result.data["output_complete"] and not result.data.get("stop_reason"))
+            checks.append({"item": label, "status": "command_exit_verified" if verified else "needs_verification",
+                           "session_id": session_id})
+        checks.append({"item": "Package startup/artifacts", "status": "needs_verification"})
+        return {"path": str(root), "version": version, "checks": checks,
+                "git": git.data if git.ok else {"status": "unavailable"}, "executed": False,
+                "ready_to_publish": False, "notes_draft": f"Release {version or 'version pending'}\n\n"
+                    + "\n".join(f"- {item['item']}: {item['status']}" for item in checks),
+                "next": "Review changes, run approved tests/build, then verify artifacts and startup. Publishing requires fresh confirmation."}
+
+    def verify_command(self, session_id, timeout=120):
+        if not 1 <= timeout <= 300:
+            raise ValueError("Use a bounded command verification deadline.")
+        deadline = time.monotonic() + timeout
+        try:
+            while True:
+                check_cancelled()
+                if ("developer.command_output" not in self.services.enabled_tools() or self.services.db.query(
+                        "SELECT 1 FROM grants WHERE tool_name='developer.command_output' AND decision='deny'")):
+                    raise PermissionError("Command output access is disabled.")
+                state = self._session(session_id).poll(max_chars=100)
+                if not state["running"] and state["output_complete"]:
+                    from jarvix.domain import ToolResult
+                    ok = state["exit_code"] == 0 and not state.get("stop_reason")
+                    return ToolResult(ok, {"session_id": session_id, "exit_code": state["exit_code"], "verified": ok},
+                                      None if ok else "Owned command did not complete successfully.")
+                if time.monotonic() >= deadline:
+                    raise InterruptedError("Command verification timed out.")
+                time.sleep(.2)
+        except InterruptedError:
+            self._session(session_id).stop("verification_cancelled")
+            raise
+
 
 def setup(services, registry):
     developer = services.developer = DeveloperService(services)
@@ -429,3 +494,7 @@ def setup(services, registry):
     add("command_output", "Read incremental stdout/stderr from an owned command session; pass the returned offset to continue.", {"session_id": string(100), "offset": integer(0, 2**53), "max_chars": integer(100, 20000)}, ["session_id"], developer.command_output)
     add("command_cancel", "Stop an owned active command and its current child processes; no arbitrary PIDs accepted.", {"session_id": string(100)}, ["session_id"], developer.command_cancel, 2)
     add("command_history", "List command metadata without arguments/output; current sessions include running state and exit code.", {"limit": integer(1, 100)}, [], developer.command_history)
+    add("release_checklist", "Inspect permitted project manifests, README/changelog, Git and owned command receipts; draft release notes without publishing or claiming unverified checks.",
+        {"path": PATH, "test_session_id": string(100), "build_session_id": string(100)}, ["path"], developer.release_checklist)
+    add("verify_command", "Wait for an owned command's actual exit and output completion. Bounded timeout/cancellation stop only that owned process; never infer tests passed from command start.",
+        {"session_id": string(100), "timeout": integer(1, 300)}, ["session_id"], developer.verify_command, 2)

@@ -7,13 +7,14 @@ from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog, QFormLayout,
     QHBoxLayout, QLineEdit, QListWidget, QListWidgetItem, QPlainTextEdit,
-    QScrollArea, QSpinBox, QSplitter, QTabWidget, QVBoxLayout, QWidget,
+    QScrollArea, QSpinBox, QSplitter, QTabWidget, QVBoxLayout, QWidget, QMenu,
 )
 
 from .capabilities import ParameterForm
 from .chat import PermissionDialog
 from .operator import ServiceJob
 from .widgets import TextPreview, button, label, clear_layout
+from .icons import icon
 
 
 TRIGGERS = ["manual", "schedule", "interval", "at_time", "jarvix_start", "windows_start",
@@ -41,21 +42,28 @@ class WorkflowSteps(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         row = QHBoxLayout()
-        for kind in ("action", "delay", "branch", "notification", "set", "foreach", "subflow"):
-            row.addWidget(button("+ " + kind.capitalize(), lambda k=kind: self.add(k), "Quiet"))
-        row.addStretch()
+        self.block_type = QComboBox(self)
+        for title, kind in (("Action", "action"), ("Delay", "delay"), ("Branch", "branch"),
+                            ("Notification", "notification"), ("Set variable", "set"),
+                            ("Read-only loop", "foreach"), ("Subflow", "subflow")):
+            self.block_type.addItem(title, kind)
+        self.block_type.setAccessibleName("New workflow block type")
+        row.addWidget(self.block_type, 1)
+        row.addWidget(button("Add block", lambda: self.add(self.block_type.currentData()), "Primary"))
         layout.addLayout(row)
-        self.blocks = QListWidget()
+        self.blocks = QListWidget(self)
         self.blocks.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
         self.blocks.setDefaultDropAction(Qt.DropAction.MoveAction)
         self.blocks.setAccessibleName("Workflow blocks, drag to reorder")
+        self.blocks.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.blocks.customContextMenuRequested.connect(self.context_menu)
         self.blocks.itemDoubleClicked.connect(lambda _item: self.edit())
         self.blocks.model().rowsMoved.connect(lambda *_: self.changed.emit())
         layout.addWidget(self.blocks, 1)
         row = QHBoxLayout()
         row.addWidget(button("Edit block", self.edit))
-        row.addWidget(button("↑", lambda: self.move(-1), "Quiet"))
-        row.addWidget(button("↓", lambda: self.move(1), "Quiet"))
+        row.addWidget(button("Move earlier", lambda: self.move(-1), "Quiet"))
+        row.addWidget(button("Move later", lambda: self.move(1), "Quiet"))
         row.addWidget(button("Remove block", self.remove, "Quiet"))
         row.addStretch()
         layout.addLayout(row)
@@ -77,7 +85,9 @@ class WorkflowSteps(QWidget):
             detail = f"Then: {len(step.get('then', []))} action(s) · Otherwise: {len(step.get('else', []))} action(s)"
         created = item is None
         item = item or QListWidgetItem()
-        item.setText(text + "\n" + detail)
+        item.setText(kind.replace("_", " ").title() + "  ·  " + text + "\n" + detail)
+        item.setIcon(icon("automations" if kind in {"branch", "foreach", "subflow"} else "play"))
+        item.setToolTip(text + " · " + detail)
         item.setData(Qt.ItemDataRole.UserRole, step)
         if created:
             self.blocks.addItem(item)
@@ -115,6 +125,22 @@ class WorkflowSteps(QWidget):
             self.blocks.takeItem(index)
             self.changed.emit()
 
+    def context_menu(self, position):
+        item = self.blocks.itemAt(position)
+        if item is None:
+            return
+        self.blocks.setCurrentItem(item)
+        menu = QMenu(self.blocks)
+        menu.addAction("Edit block", self.edit)
+        earlier = menu.addAction("Move earlier", lambda: self.move(-1))
+        later = menu.addAction("Move later", lambda: self.move(1))
+        earlier.setEnabled(self.blocks.currentRow() > 0)
+        later.setEnabled(self.blocks.currentRow() < self.blocks.count() - 1)
+        menu.addSeparator()
+        menu.addAction("Remove block", self.remove)
+        menu.exec(self.blocks.mapToGlobal(position))
+        menu.deleteLater()
+
 
 class WorkflowBlockDialog(QDialog):
     def __init__(self, services, step, parent=None):
@@ -126,7 +152,7 @@ class WorkflowBlockDialog(QDialog):
         layout = QVBoxLayout(self)
         self.value = None
         if self.kind == "action":
-            self.tool = QComboBox()
+            self.tool = QComboBox(self)
             for spec in services.registry.specs():
                 if spec.name.startswith("operator."):
                     continue
@@ -137,13 +163,13 @@ class WorkflowBlockDialog(QDialog):
             layout.addWidget(self.tool)
             self.permission = label("", "Muted", True)
             layout.addWidget(self.permission)
-            self.scroll = QScrollArea()
+            self.scroll = QScrollArea(self)
             self.scroll.setWidgetResizable(True)
             layout.addWidget(self.scroll, 1)
-            self.retries = QSpinBox()
+            self.retries = QSpinBox(self)
             self.retries.setRange(0, 1)
             self.retries.setValue(step.get("retries", 0))
-            self.on_error = QComboBox()
+            self.on_error = QComboBox(self)
             self.on_error.addItems(["stop", "continue"])
             self.on_error.setCurrentText(step.get("on_error", "stop"))
             form = QFormLayout()
@@ -152,11 +178,11 @@ class WorkflowBlockDialog(QDialog):
             layout.addLayout(form)
             self.tool.currentIndexChanged.connect(self.select_tool)
             self.select_tool(initial=step.get("arguments", {}))
-            self.output_id = QLineEdit(step.get("id", ""))
+            self.output_id = QLineEdit(step.get("id", ""), self)
             self.output_id.setPlaceholderText("Optional output ID for later results.ID.data references")
             layout.addWidget(self.output_id)
-            self.structured = QCheckBox("Use structured JSON arguments / references")
-            self.raw_arguments = QPlainTextEdit(json.dumps(step.get("arguments", {}), indent=2))
+            self.structured = QCheckBox("Use structured JSON arguments / references", self)
+            self.raw_arguments = QPlainTextEdit(json.dumps(step.get("arguments", {}), indent=2), self)
             self.raw_arguments.setMaximumHeight(155)
             self.raw_arguments.hide()
             self.structured.toggled.connect(self.raw_arguments.setVisible)
@@ -166,7 +192,7 @@ class WorkflowBlockDialog(QDialog):
             from jarvix.capabilities.operator_graph import references
             self.structured.setChecked(bool(references(step.get("arguments", {}))))
         elif self.kind == "delay":
-            self.seconds = QSpinBox()
+            self.seconds = QSpinBox(self)
             self.seconds.setRange(0, 60)
             self.seconds.setSuffix(" seconds")
             self.seconds.setValue(step.get("seconds", 1))
@@ -178,17 +204,17 @@ class WorkflowBlockDialog(QDialog):
                             {"kind": "action", "tool": "tasks.list", "arguments": {}}]},
                         "subflow": {"kind": "subflow", "workflow_id": ""}}
             layout.addWidget(label("Structured block. The full workflow validates references, limits, immutable subflows and permissions before saving.", "Muted", True))
-            self.raw_block = QPlainTextEdit(json.dumps(step if len(step) > 1 else defaults[self.kind], indent=2))
+            self.raw_block = QPlainTextEdit(json.dumps(step if len(step) > 1 else defaults[self.kind], indent=2), self)
             layout.addWidget(self.raw_block, 1)
         else:
             layout.addWidget(label("Safe condition", "Heading"))
-            self.condition = QPlainTextEdit()
+            self.condition = QPlainTextEdit(self)
             self.condition.setMaximumHeight(130)
             self.condition.setPlainText(json.dumps(step.get("condition", {"kind": "weekday", "days": [0, 1, 2, 3, 4]}), indent=2))
             layout.addWidget(self.condition)
-            tabs = QTabWidget()
-            self.then_steps = WorkflowSteps(services, step.get("then", []))
-            self.else_steps = WorkflowSteps(services, step.get("else", []))
+            tabs = QTabWidget(self)
+            self.then_steps = WorkflowSteps(services, step.get("then", []), self)
+            self.else_steps = WorkflowSteps(services, step.get("else", []), self)
             tabs.addTab(self.then_steps, "Condition met")
             tabs.addTab(self.else_steps, "Otherwise")
             layout.addWidget(tabs, 1)
@@ -205,7 +231,7 @@ class WorkflowBlockDialog(QDialog):
         from jarvix.capabilities.operator_graph import references
         spec = self.services.registry.get(self.tool.currentData())
         literal = {key: value for key, value in (initial or {}).items() if not references(value)}
-        self.form = ParameterForm(spec.parameters, literal)
+        self.form = ParameterForm(spec.parameters, literal, self)
         self.scroll.setWidget(self.form)
         self.permission.setText(f"{spec.description}\nPermission: {spec.permission} · Level {spec.permission_level or (1 if spec.risk == 'read' else 2)}")
         can_retry = spec.permission_level == 1 and spec.name in RETRY_SAFE
@@ -251,50 +277,66 @@ class WorkflowBuilder(QDialog):
         self.setWindowTitle("Jarvix · Workflow builder")
         self.resize(1040, 770)
         layout = QVBoxLayout(self)
-        layout.addWidget(label("WORKFLOW BUILDER", "Eyebrow"))
-        layout.addWidget(label("Trigger → conditions → ordered actions", "Heading"))
-        self.name = QLineEdit(self.definition.get("name", ""))
+        layout.addWidget(label("Edit workflow" if self.definition else "Create workflow", "Title"))
+        self.name = QLineEdit(self.definition.get("name", ""), self)
+        self.name.setAccessibleName("Workflow name")
         self.name.setPlaceholderText("Name this workflow or routine")
         layout.addWidget(self.name)
-        split = self.editor = QSplitter()
-        config = QWidget()
+        split = self.editor = QSplitter(self)
+        config = QWidget(self)
         form = QVBoxLayout(config)
-        self.kind = QComboBox()
+        self.kind = QComboBox(self)
         self.kind.addItems(["workflow", "routine"])
         self.kind.setCurrentText(self.definition.get("kind", "workflow"))
         self.kind.currentTextChanged.connect(self.kind_changed)
         form.addWidget(label("TYPE", "Eyebrow"))
         form.addWidget(self.kind)
-        self.trigger = QComboBox()
+        self.trigger = QComboBox(self)
         self.trigger.addItems(TRIGGERS)
         for item in self.services.plugins.contributions("triggers"):
             self.trigger.addItem(item.get("title", item["name"]) + " · extension", item["target"])
         self.trigger.setCurrentText(self.definition.get("trigger", "manual"))
         form.addWidget(label("TRIGGER", "Eyebrow"))
         form.addWidget(self.trigger)
-        self.config = QPlainTextEdit()
+        self.config = QPlainTextEdit(self)
+        self.config.setAccessibleName("Structured trigger configuration")
         self.config.setPlainText(json.dumps(self.definition.get("config", {}), indent=2))
-        self.config.setMaximumHeight(170)
+        self.config.setMaximumHeight(120)
+        self.config_toggle = QCheckBox("Edit trigger settings", self)
+        self.config_toggle.setChecked(bool(self.definition.get("config")))
+        self.config_toggle.toggled.connect(self.config.setVisible)
+        form.addWidget(self.config_toggle)
         form.addWidget(self.config)
+        self.config.setVisible(self.config_toggle.isChecked())
         self.trigger.currentTextChanged.connect(self.trigger_changed)
         from jarvix.capabilities.workflows import WORKFLOW_HOTKEYS
-        self.hotkey = QComboBox()
+        self.hotkey = QComboBox(self)
         self.hotkey.addItems(list(WORKFLOW_HOTKEYS))
         self.hotkey.setCurrentText(self.definition.get("config", {}).get("shortcut", "Ctrl+Alt+F1"))
         self.hotkey.setVisible(self.trigger.currentText() == "hotkey")
         self.hotkey.setToolTip("The shortcut works while Jarvix is running, including in the tray.")
         form.addWidget(self.hotkey)
-        form.addWidget(label("CONDITIONS", "Eyebrow"))
-        self.conditions = QPlainTextEdit()
+        self.conditions = QPlainTextEdit(self)
+        self.conditions.setAccessibleName("Structured workflow conditions")
         self.conditions.setPlainText(json.dumps(self.definition.get("conditions", []), indent=2))
-        self.conditions.setMaximumHeight(170)
+        self.conditions.setMaximumHeight(120)
+        conditions_toggle = QCheckBox("Set conditions", self)
+        conditions_toggle.setChecked(bool(self.definition.get("conditions")))
+        conditions_toggle.toggled.connect(self.conditions.setVisible)
+        form.addWidget(conditions_toggle)
         form.addWidget(self.conditions)
-        form.addWidget(label("VARIABLES", "Eyebrow"))
-        self.variables = QPlainTextEdit(json.dumps(self.definition.get("variables", {}), indent=2))
-        self.variables.setMaximumHeight(90)
+        self.conditions.setVisible(conditions_toggle.isChecked())
+        self.variables = QPlainTextEdit(json.dumps(self.definition.get("variables", {}), indent=2), self)
+        self.variables.setAccessibleName("Structured workflow variables")
+        self.variables.setMaximumHeight(80)
         self.variables.setToolTip("JSON values. Reference with {\"$ref\": \"variables.name\"} in structured arguments.")
+        variables_toggle = QCheckBox("Define workflow variables", self)
+        variables_toggle.setChecked(bool(self.definition.get("variables")))
+        variables_toggle.toggled.connect(self.variables.setVisible)
+        form.addWidget(variables_toggle)
         form.addWidget(self.variables)
-        self.enabled = QCheckBox("Enable this workflow")
+        self.variables.setVisible(variables_toggle.isChecked())
+        self.enabled = QCheckBox("Enable this workflow", self)
         self.enabled.setChecked(self.definition.get("enabled", False))
         form.addWidget(self.enabled)
         form.addWidget(label("Scheduled changes need explicit tool approval. Every run retains permission checks.", "Muted", True))
@@ -302,8 +344,11 @@ class WorkflowBuilder(QDialog):
         self.grants = QVBoxLayout()
         form.addLayout(self.grants)
         form.addStretch()
-        split.addWidget(config)
-        self.steps = WorkflowSteps(self.services, self.definition.get("steps", []))
+        config_scroll = QScrollArea(self)
+        config_scroll.setWidgetResizable(True)
+        config_scroll.setWidget(config)
+        split.addWidget(config_scroll)
+        self.steps = WorkflowSteps(self.services, self.definition.get("steps", []), self)
         self.steps.changed.connect(self.refresh_grants)
         split.addWidget(self.steps)
         split.setSizes([310, 700])
@@ -311,12 +356,12 @@ class WorkflowBuilder(QDialog):
         self.status = label("Drag blocks to reorder. Double-click a block to edit it.", "Muted", True)
         layout.addWidget(self.status)
         row = QHBoxLayout()
-        row.addWidget(button("Preview / validate", self.preview))
+        row.addWidget(button("Validate workflow", self.preview))
         self.test_button = button("Test conditions", self.test)
         row.addWidget(self.test_button)
         row.addWidget(button("Copy definition", self.copy_definition, "Quiet"))
         row.addWidget(button("Debug saved workflow", self.debug, "Quiet"))
-        row.addWidget(button("Templates", lambda: self.window.open_capabilities("workflows.templates"), "Quiet"))
+        row.addWidget(button("Workflow templates", lambda: self.window.open_capabilities("workflows.templates"), "Quiet"))
         row.addStretch()
         self.cancel_button = button("Cancel active save", self.cancel)
         self.cancel_button.setEnabled(False)
@@ -355,7 +400,7 @@ class WorkflowBuilder(QDialog):
             self.grants.addWidget(label("BACKGROUND APPROVALS", "Eyebrow"))
             self.grants.addWidget(label("Optional: allow these exact actions and arguments when triggered. Review them before saving.", "Muted", True))
         for name in names:
-            check = QCheckBox(name)
+            check = QCheckBox(name, self)
             check.setChecked(name in checked)
             self.grant_widgets[name] = check
             self.grants.addWidget(check)
@@ -370,6 +415,7 @@ class WorkflowBuilder(QDialog):
                     "cpu_above": {"threshold": 90}, "memory_above": {"threshold": 90},
                     "hotkey": {"shortcut": "Ctrl+Alt+F1"}, "clipboard_changed": {"opt_in": False}}
         self.config.setPlainText(json.dumps(defaults.get(trigger, {}), indent=2))
+        self.config_toggle.setChecked(bool(defaults.get(trigger)))
         self.hotkey.setVisible(trigger == "hotkey")
 
     def values(self):
@@ -507,7 +553,7 @@ class WorkflowHistory(QDialog):
         self.setWindowTitle("Workflow · Run history")
         self.resize(780, 560)
         layout = QVBoxLayout(self)
-        self.runs = QListWidget()
+        self.runs = QListWidget(self)
         layout.addWidget(self.runs)
         self.runs.currentItemChanged.connect(self.update_controls)
         self.status = label("", "Muted", True)
@@ -587,7 +633,7 @@ def import_definition(window):
     dialog.resize(720, 560)
     layout = QVBoxLayout(dialog)
     layout.addWidget(label("Paste an exported workflow. Imported workflows start disabled.", "Muted", True))
-    editor = QPlainTextEdit()
+    editor = QPlainTextEdit(dialog)
     layout.addWidget(editor)
     error = label("", "Muted", True)
     layout.addWidget(error)

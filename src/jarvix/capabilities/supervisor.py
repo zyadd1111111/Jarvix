@@ -53,11 +53,20 @@ class ExecutionSupervisor:
     def recoverable(self):
         return [row for row in self.list() if row["restart_resume_available"] and not row.get("retry_session_id")]
 
-    def start(self, plan, background=False, approve=None, on_event=None):
+    def _permitted(self, names):
+        enabled = self.s.enabled_tools()
+        return all(name in enabled and not self.s.db.query(
+            "SELECT 1 FROM grants WHERE tool_name=? AND decision='deny'", (name,)) for name in names)
+
+    def start(self, plan, background=False, approve=None, on_event=None, _source_session_id=None):
         """Explicit user-reviewed task; detached work has its own cancel token."""
         if type(background) is not bool:
             raise ValueError("Background must be a boolean.")
         check_cancelled()
+        boundaries = ("execution.start", "operator.preview_replan", "operator.replan", "operator.session", "operator.sessions") if _source_session_id else (
+            "execution.start", "operator.preview", "operator.run")
+        if not self._permitted(boundaries):
+            return {"accepted": False, "failure_class": "permission_denied", "reason": "Task execution or preview is disabled or denied."}
         validated = self.s.operator._validate(plan)
         if background:
             self.s.operator.background_safe(validated)
@@ -66,15 +75,21 @@ class ExecutionSupervisor:
             raise PermissionError("Unattended work cannot start independent Operator sessions.")
         approve = approve or (current.approve if current else lambda _: False)
         on_event = on_event or (current.on_event if current else None)
-        preview = self.s.operator.preview(validated)
+        preview = (self.s.operator.preview_replan(_source_session_id, validated) if _source_session_id
+                   else self.s.operator.preview(validated))
         approved_preview = {"goal": validated["goal"], "on_failure": validated.get("on_failure", "stop"),
                             "steps": [{**step, "permission_level": self.s.registry.get(step["tool"]).permission_level}
                                       for step in validated["steps"]]}
+        if _source_session_id:
+            approved_preview.update(recovery=preview["recovery"],
+                                    retained_step_ids=preview["recovery"]["retained_step_ids"])
         if not approve(PermissionRequest("execute", "execution.start", "operator.preview",
                 "Start this supervised task. Sensitive actions still require fresh confirmation.",
                 {"background": background}, json.dumps(preview, ensure_ascii=False, indent=2))):
             return {"accepted": False, "reason": "Task preview was not approved."}
         check_cancelled()
+        if not self._permitted(boundaries):
+            return {"accepted": False, "failure_class": "permission_denied", "reason": "Task permissions changed during preview."}
         ready, cancel = threading.Event(), threading.Event()
         value = {}
 
@@ -100,9 +115,11 @@ class ExecutionSupervisor:
                     matches = json.loads(request.preview) == approved_preview
                 except (ValueError, TypeError):
                     matches = False
-                if matches:
+                if matches and self._permitted(boundaries):
                     preview_available = False
                     return True
+                if matches:
+                    return False
             if background or cancel.is_set():
                 return False
             with self._lock:
@@ -119,7 +136,10 @@ class ExecutionSupervisor:
             try:
                 with operation(cancel, approval, timeout=validated.get("timeout_seconds", 120), max_steps=64,
                                on_event=event):
-                    self.s.operator.run(validated, approve=approval, cancel=cancel, on_event=event)
+                    if _source_session_id:
+                        self.s.operator.replan(_source_session_id, validated, approve=approval, cancel=cancel, on_event=event)
+                    else:
+                        self.s.operator.run(validated, approve=approval, cancel=cancel, on_event=event)
             except Exception:
                 self.s.repository.audit("error", "Supervised task could not initialize or stopped unexpectedly")
             finally:

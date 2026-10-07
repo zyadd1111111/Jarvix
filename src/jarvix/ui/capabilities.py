@@ -144,17 +144,21 @@ class CapabilityDialog(QDialog):
         self.selected_tool = None
         self.form = None
         self.continuation = None
-        self.setWindowTitle("Jarvix · Local actions")
+        self.reviewed_skill = None
+        self.setWindowTitle("Jarvix · Tools")
         self.resize(850, 760)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(22, 20, 22, 20)
-        layout.addWidget(label("LOCAL ACTIONS", "Eyebrow"))
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(8)
+        layout.addWidget(label("Tools", "Title"))
         self.search = QLineEdit()
         self.search.setPlaceholderText("Search registered capabilities…")
+        self.search.setAccessibleName("Search registered tools")
         layout.addWidget(self.search)
         row = QHBoxLayout()
         self.tools = QComboBox()
         self.tools.setMinimumContentsLength(30)
+        self.tools.setAccessibleName("Registered tool")
         row.addWidget(self.tools, 1)
         self.favorite = QCheckBox("Favorite")
         self.favorite.toggled.connect(self.set_favorite)
@@ -162,7 +166,7 @@ class CapabilityDialog(QDialog):
         layout.addLayout(row)
         self.description = label("", "Muted", True)
         layout.addWidget(self.description)
-        self.permission = label("", "Accent", True)
+        self.permission = label("", "Muted", True)
         layout.addWidget(self.permission)
         self.form_scroll = QScrollArea()
         self.form_scroll.setWidgetResizable(True)
@@ -181,6 +185,9 @@ class CapabilityDialog(QDialog):
         self.more_button = button("Next evidence page", self.next_page, "Quiet")
         self.more_button.hide()
         followups.addWidget(self.more_button)
+        self.save_skill_button = button("Review and save skill", self.review_skill, "Quiet")
+        self.save_skill_button.hide()
+        followups.addWidget(self.save_skill_button)
         self.collections = QComboBox()
         self.collections.hide()
         followups.addWidget(self.collections, 1)
@@ -248,6 +255,8 @@ class CapabilityDialog(QDialog):
         self.result_tabs.setTabEnabled(1, False)
         self.continuation = None
         self.more_button.hide()
+        self.reviewed_skill = None
+        self.save_skill_button.hide()
         self.collections.hide()
         self.collection_search.hide()
         self.status.setText("Ready")
@@ -306,6 +315,8 @@ class CapabilityDialog(QDialog):
     def completed(self, result):
         self.continuation = None
         self.more_button.hide()
+        self.reviewed_skill = None
+        self.save_skill_button.hide()
         self.collections.hide()
         self.collection_search.hide()
         self.result.setPlainText(json.dumps(result.as_dict(), indent=2, ensure_ascii=False, default=str))
@@ -315,6 +326,12 @@ class CapabilityDialog(QDialog):
         if source_text:
             self.result_tabs.setCurrentIndex(1)
         value = result.data if result.ok and isinstance(result.data, dict) else {}
+        if self.selected_tool in {"skills.learn_preview", "skills.import_preview", "skills.pattern_preview"} and value.get("review_fingerprint"):
+            self.reviewed_skill = value.get("save_arguments") or {
+                **(self.worker.arguments if self.worker else self.form.arguments()),
+                "review_fingerprint": value["review_fingerprint"]}
+            self.save_skill_button.setEnabled(False)
+            self.save_skill_button.show()
         if self.selected_tool.startswith(("documents.", "knowledge.")) and (
                 value.get("next_cursor") is not None or value.get("next_document_cursor") is not None):
             arguments = dict(self.worker.arguments if self.worker else self.form.arguments())
@@ -333,13 +350,18 @@ class CapabilityDialog(QDialog):
                 self.collections.addItem(item["name"], item["id"])
             self.collections.show()
             self.collection_search.show()
-        self.status.setText("Completed locally" if result.ok else (result.error or "Action failed"))
+        self.status.setText((value.get("reason") or "Action was not started") if value.get("accepted") is False
+                            else "Completed locally" if result.ok else (result.error or "Action failed"))
 
     def next_page(self):
         if self.continuation and not self.worker:
             name, arguments = self.continuation
             self.select(name, arguments)
             self.run_action()
+
+    def review_skill(self):
+        if self.reviewed_skill and not self.worker:
+            self.select("skills.save", dict(self.reviewed_skill))
 
     def search_collection(self):
         if not self.worker and self.collections.currentData():
@@ -353,6 +375,7 @@ class CapabilityDialog(QDialog):
         for widget in (self.search, self.tools, self.form, self.run_button):
             widget.setEnabled(True)
         self.cancel_button.setEnabled(False)
+        self.save_skill_button.setEnabled(bool(self.reviewed_skill))
         self.window.release_job(worker)
 
     def cancel(self):

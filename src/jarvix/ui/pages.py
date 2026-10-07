@@ -10,10 +10,23 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLineEdit, QPlainTextEdit,
     QComboBox, QListWidget, QListWidgetItem, QTableWidgetItem, QSplitter,
     QFileDialog, QInputDialog, QProgressBar, QCheckBox, QSpinBox,
-    QScrollArea, QFrame,
+    QScrollArea, QFrame, QMenu, QStackedWidget, QHeaderView, QTabWidget, QLayout,
 )
 
-from .widgets import label, button, panel, clear_layout, table, SignalOrb, TextPreview
+from .widgets import label, button, clear_layout, table, TextPreview
+from .icons import icon
+from .theme import TOKENS
+
+SPACE = TOKENS["spacing"]
+
+
+class RecordItem(QTableWidgetItem):
+    def __lt__(self, other):
+        left = self.data(Qt.ItemDataRole.UserRole + 1)
+        right = other.data(Qt.ItemDataRole.UserRole + 1)
+        if left is not None and right is not None and type(left) is type(right):
+            return left < right
+        return self.text().casefold() < other.text().casefold()
 
 
 def pretty_date(value) -> str:
@@ -26,18 +39,41 @@ def pretty_date(value) -> str:
 
 
 def fill_table(widget, rows, columns):
+    sorting = widget.isSortingEnabled()
+    widget.setSortingEnabled(False)
     widget.setRowCount(len(rows))
     for row_index, row in enumerate(rows):
         for col_index, column in enumerate(columns):
             value = column(row) if callable(column) else row.get(column, "")
-            item = QTableWidgetItem(str(value if value is not None else "—"))
+            item = RecordItem(str(value if value is not None else "—"))
+            item.setToolTip(item.text())
             item.setData(Qt.ItemDataRole.UserRole, row)
+            sort_keys = widget.property("sort_keys") or []
+            if col_index < len(sort_keys):
+                item.setData(Qt.ItemDataRole.UserRole + 1, row.get(sort_keys[col_index]))
             widget.setItem(row_index, col_index, item)
+    widget.setSortingEnabled(sorting)
 
 
 def selected_record(widget):
     selected = widget.selectedItems()
     return selected[0].data(Qt.ItemDataRole.UserRole) if selected else None
+
+
+def context_menu(widget, actions):
+    """Native menu actions use the same callbacks as their visible controls."""
+    widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+    def show(position):
+        index = widget.indexAt(position)
+        if not index.isValid():
+            return
+        widget.selectRow(index.row())
+        menu = QMenu(widget)
+        for caption, callback, symbol in actions:
+            action = menu.addAction(icon(symbol), caption)
+            action.triggered.connect(lambda _checked=False, action=callback: action())
+        menu.exec(widget.viewport().mapToGlobal(position))
+    widget.customContextMenuRequested.connect(show)
 
 
 class Page(QWidget):
@@ -49,13 +85,14 @@ class Page(QWidget):
         self.window = window
         self.services = window.services
         self.layout = QVBoxLayout(self)
-        self.layout.setContentsMargins(32, 28, 32, 28)
-        self.layout.setSpacing(22)
-        heading = QVBoxLayout()
-        heading.setSpacing(6)
-        heading.addWidget(label(self.title.upper(), "Eyebrow"))
+        self.layout.setContentsMargins(SPACE[3], SPACE[3], SPACE[3], SPACE[3])
+        self.layout.setSpacing(SPACE[2])
+        heading = QHBoxLayout()
         heading.addWidget(label(self.title, "Title"))
-        heading.addWidget(label(self.subtitle, "Subtitle", True))
+        heading.addStretch()
+        self.page_description = label(self.subtitle, "Muted", True)
+        self.page_description.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        heading.addWidget(self.page_description, 1)
         self.layout.addLayout(heading)
 
     def refresh(self):
@@ -67,78 +104,102 @@ class Page(QWidget):
 
 class HomePage(Page):
     title = "Home"
-    subtitle = "Your workspace, in focus."
+    subtitle = "Current work and local activity"
 
     def __init__(self, window):
         super().__init__(window)
+        self.greeting = label("", "Muted")
+        self.date_label = label("", "Muted")
+        date_row = QHBoxLayout()
+        date_row.addWidget(self.greeting)
+        date_row.addStretch()
+        date_row.addWidget(self.date_label)
+        self.layout.addLayout(date_row)
+        command_row = QHBoxLayout()
+        self.command = QLineEdit()
+        self.command.setObjectName("CommandInput")
+        self.command.setPlaceholderText("Ask Jarvix or tell it to do something…")
+        self.command.setAccessibleName("Universal Jarvix command")
+        self.command.returnPressed.connect(self.submit)
+        command_row.addWidget(self.command, 1)
+        command_row.addWidget(button("Ask Jarvix", self.submit, "Primary"))
+        self.layout.addLayout(command_row)
+        shortcuts = QHBoxLayout()
+        shortcuts.addWidget(button("Continue saved work", lambda: window.open_adaptive("Continue"), "Quiet"))
+        shortcuts.addWidget(button("Manage routines", lambda: window.navigate("Automations"), "Quiet"))
+        shortcuts.addWidget(button("Inspect context", lambda: window.open_adaptive("Personal context"), "Quiet"))
+        shortcuts.addStretch()
+        self.layout.addLayout(shortcuts)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
         body = QWidget()
+        self.scroll_body = body
         self.body_layout = QVBoxLayout(body)
-        self.body_layout.setContentsMargins(0, 0, 8, 0)
-        self.body_layout.setSpacing(20)
+        self.body_layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
+        self.body_layout.setContentsMargins(0, 0, 0, 0)
+        self.body_layout.setSpacing(SPACE[3])
         scroll.setWidget(body)
-        self.layout.addWidget(scroll)
-        hero = QFrame()
-        hero.setObjectName("Hero")
-        hl = QVBoxLayout(hero)
-        hl.setContentsMargins(27, 24, 27, 27)
-        hl.setSpacing(14)
-        row = QHBoxLayout()
-        words = QVBoxLayout()
-        self.greeting = label("", "Heading")
-        self.date_label = label("", "Muted")
-        words.addWidget(self.greeting)
-        words.addWidget(self.date_label)
-        row.addLayout(words)
-        row.addStretch()
-        row.addWidget(SignalOrb(62))
-        hl.addLayout(row)
-        hl.addWidget(label("What would you like to move forward?", "Title", True))
-        entry = QHBoxLayout()
-        self.command = QLineEdit()
-        self.command.setPlaceholderText("Ask Jarvix or tell it to do something…")
-        self.command.setMinimumHeight(49)
-        self.command.returnPressed.connect(self.submit)
-        entry.addWidget(self.command)
-        entry.addWidget(button("Ask Jarvix  ↗", self.submit, "Primary"))
-        hl.addLayout(entry)
-        hl.addWidget(label("Local workspace ready  ·  You control every external tool result", "Muted"))
-        self.body_layout.addWidget(hero)
-        self.operator_panel, self.operator_layout = panel()
-        self.body_layout.addWidget(self.operator_panel)
-        self.metrics = QHBoxLayout()
-        self.body_layout.addLayout(self.metrics)
-        split = QHBoxLayout()
-        split.setSpacing(18)
-        left = QVBoxLayout()
-        left.setSpacing(18)
-        right = QVBoxLayout()
-        right.setSpacing(18)
-        split.addLayout(left, 3)
-        split.addLayout(right, 2)
-        self.body_layout.addLayout(split)
-        self.tasks_panel, self.tasks_layout = panel()
-        left.addWidget(self.tasks_panel)
-        self.history_panel, self.history_layout = panel()
-        left.addWidget(self.history_panel)
-        self.recent_panel, self.recent_layout = panel()
-        left.addWidget(self.recent_panel)
-        self.health_panel, self.health_layout = panel()
-        right.addWidget(self.health_panel)
-        self.connections_panel, self.connections_layout = panel()
-        right.addWidget(self.connections_panel)
-        self.activity_panel, self.activity_layout = panel()
-        right.addWidget(self.activity_panel)
-        self.workspace_panel, self.workspace_layout = panel()
-        left.addWidget(self.workspace_panel)
-        self.automation_panel, self.automation_layout = panel()
-        right.addWidget(self.automation_panel)
-        self.favorites_panel, self.favorites_layout = panel()
-        right.addWidget(self.favorites_panel)
-        left.addStretch()
-        right.addStretch()
+        self.layout.addWidget(scroll, 1)
+        self.sections = QWidget()
+        self.section_columns = QHBoxLayout(self.sections)
+        self.section_columns.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
+        self.section_columns.setContentsMargins(0, 0, 0, 0)
+        self.section_columns.setSpacing(SPACE[3])
+        self.body_layout.addWidget(self.sections)
+        current = self.column("CURRENT")
+        today = self.column("TODAY")
+        jarvix = self.column("JARVIX")
+        self.operator_panel, self.operator_layout = self.group(current)
+        self.mission_panel, self.mission_layout = self.group(current)
+        self.workspace_panel, self.workspace_layout = self.group(current)
+        self.tasks_panel, self.tasks_layout = self.group(today)
+        self.daily_panel, self.daily_layout = self.group(today)
+        self.daily_panel.hide()
+        self._daily_revision = 0
+        self.connections_panel, self.connections_layout = self.group(jarvix)
+        self.automation_panel, self.automation_layout = self.group(jarvix)
+        self.favorites_panel, self.favorites_layout = self.group(jarvix)
+        for column in (current, today, jarvix):
+            column.addStretch()
+        self.health_panel, self.health_layout = self.group(self.body_layout)
+        recent = QWidget()
+        recent_columns = QHBoxLayout(recent)
+        recent_columns.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
+        recent_columns.setContentsMargins(0, 0, 0, 0)
+        recent_columns.setSpacing(SPACE[3])
+        self.body_layout.addWidget(label("RECENT", "Eyebrow"))
+        self.body_layout.addWidget(recent)
+        for name in ("recent", "history", "activity"):
+            container = QWidget()
+            content = QVBoxLayout(container)
+            content.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
+            content.setContentsMargins(0, 0, SPACE[1], 0)
+            content.setSpacing(SPACE[0])
+            recent_columns.addWidget(container, 1)
+            setattr(self, name + "_panel", container)
+            setattr(self, name + "_layout", content)
         self.body_layout.addStretch()
+
+    def column(self, title):
+        container = QWidget()
+        content = QVBoxLayout(container)
+        content.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
+        content.setContentsMargins(0, 0, SPACE[2], 0)
+        content.setSpacing(SPACE[2])
+        content.addWidget(label(title, "Eyebrow"))
+        self.section_columns.addWidget(container, 1)
+        return content
+
+    @staticmethod
+    def group(parent):
+        frame = QWidget()
+        content = QVBoxLayout(frame)
+        content.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
+        content.setContentsMargins(0, 0, 0, 0)
+        content.setSpacing(SPACE[0])
+        parent.addWidget(frame)
+        return frame, content
 
     def submit(self):
         text = self.command.text().strip()
@@ -152,128 +213,155 @@ class HomePage(Page):
         row.addWidget(label(title, "Heading"))
         row.addStretch()
         if link:
-            row.addWidget(button("View all  ↗", lambda: self.window.navigate(link), "Quiet"))
+            row.addWidget(button("Open " + link.lower(), lambda: self.window.navigate(link), "Quiet"))
         layout.addLayout(row)
 
     def refresh(self):
         now = datetime.now()
-        greeting = "Good morning" if now.hour < 12 else "Good afternoon" if now.hour < 18 else "Good evening"
-        self.greeting.setText(greeting + ". Your workspace is ready.")
-        self.date_label.setText(now.strftime("%A, %B %d  ·  %I:%M %p"))
-        self.section(self.operator_layout, "Operator session")
+        self.greeting.setText("Good morning" if now.hour < 12 else "Good afternoon" if now.hour < 18 else "Good evening")
+        self.date_label.setText(now.strftime("%a, %b %d · %I:%M %p"))
+        self.section(self.operator_layout, "Operator")
         sessions = self.services.operator.list() if hasattr(self.services, "operator") else []
-        current = next((row for row in sessions if row.get("status") in {"running", "paused", "planning"}),
-                       sessions[0] if sessions else None)
+        current = next((row for row in sessions if row.get("status") in {"running", "paused", "planning"}), None)
         if current:
             steps = current.get("steps", [])
             done = sum(step.get("status") in {"completed", "succeeded", "complete"} for step in steps)
             self.operator_layout.addWidget(label(current.get("goal", "Operator task"), wrap=True))
-            self.operator_layout.addWidget(label(f"{current.get('status', 'ready').capitalize()} · {done}/{len(steps)} steps", "Accent"))
+            self.operator_layout.addWidget(label(f"{current.get('status', 'ready').capitalize()} · {done}/{len(steps)} steps", "Muted"))
             progress = QProgressBar()
             progress.setValue(int(current.get("progress_percent", 100 * done / max(1, len(steps)))))
             self.operator_layout.addWidget(progress)
-            self.operator_layout.addWidget(button("View timeline and controls", lambda r=current: self.window.open_operator(r["id"]), "Quiet"))
+            self.operator_layout.addWidget(button("Open session controls", lambda r=current: self.window.open_operator(r["id"]), "Quiet"))
         else:
-            self.operator_layout.addWidget(label("Ready for your next task. Plans and progress stay visible here.", "Muted", True))
-            self.operator_layout.addWidget(button("Open operator sessions", self.window.open_operator, "Quiet"))
-        self.operator_layout.addWidget(button("Search knowledge & local models", self.window.open_adaptive, "Quiet"))
-        tasks = self.services.list_tasks()
-        pending = [item for item in tasks if item.get("status") not in ("done", "completed")]
-        notes = self.services.list_notes()
-        memories = self.services.list_memories()
-        clear_layout(self.metrics)
-        for value, title, destination in ((len(pending), "OPEN TASKS", "Tasks"), (len(notes), "SAVED NOTES", "Notes"), (len(memories), "EXPLICIT MEMORIES", "Memory")):
-            frame, layout = panel()
-            row = QHBoxLayout()
-            row.addWidget(label(str(value), "Metric"))
-            row.addStretch()
-            row.addWidget(button("↗", lambda dest=destination: self.window.navigate(dest), "Quiet"))
-            layout.addLayout(row)
-            layout.addWidget(label(title, "Eyebrow"))
-            self.metrics.addWidget(frame)
+            self.operator_layout.addWidget(label("No task running.", "Muted"))
+            self.operator_layout.addWidget(button("View operator sessions", self.window.open_operator, "Quiet"))
+        self.section(self.mission_layout, "Mission")
+        missions = self.services.execute_tool("missions.list", {})
+        active_missions = [mission for mission in missions.data.get("items", [])
+                           if mission["status"] in {"active", "paused"}] if missions.ok else []
+        for mission in active_missions[:2]:
+            self.mission_layout.addWidget(button(mission["goal"], lambda record=mission:
+                self.window.open_capabilities("missions.summary", {"id": record["id"]}), "Quiet"))
+            self.mission_layout.addWidget(label(mission["status"].capitalize(), "Muted"))
+        if not active_missions:
+            self.mission_layout.addWidget(label("No active mission." if missions.ok else "Mission list unavailable.", "Muted"))
+        self.mission_layout.addWidget(button("Manage missions", lambda: self.window.open_adaptive("Missions"), "Quiet"))
+        self.section(self.workspace_layout, "Project & workspace")
+        projects = self.services.list_projects()
+        for project in projects[:2]:
+            self.workspace_layout.addWidget(button(project["name"], lambda record=project:
+                self.window.open_capabilities("intelligence.prepare", {"project_id": record["id"]}), "Quiet"))
+        if not projects:
+            self.workspace_layout.addWidget(label("No project registered. Add a folder in Projects.", "Muted", True))
+        for workspace in self.services.records.list("workspace")[:2]:
+            self.workspace_layout.addWidget(button("Launch " + workspace["name"], lambda record=workspace:
+                self.window.open_capabilities("workspaces.launch", {"id": record["id"]}), "Quiet"))
+        self.workspace_layout.addWidget(button("Manage workspaces", self.window.open_workspaces, "Quiet"))
+        self.section(self.tasks_layout, "Tasks", "Tasks")
         today_tasks = self.services.productivity.tasks.search(view="today")["items"]
-        self.section(self.tasks_layout, "Today's tasks", "Tasks")
-        for task in today_tasks[:4]:
-            self.tasks_layout.addWidget(label("○  " + task["title"], wrap=True))
+        for task in today_tasks[:5]:
+            row = QHBoxLayout()
+            row.addWidget(label(task["title"], wrap=True), 1)
             if task.get("due_at"):
-                self.tasks_layout.addWidget(label("     Reminder · " + pretty_date(task["due_at"]), "Muted"))
+                row.addWidget(label(pretty_date(task["due_at"]), "Muted"))
+            self.tasks_layout.addLayout(row)
         if not today_tasks:
-            self.tasks_layout.addWidget(label("No open tasks due today. Add a task or review your upcoming work.", "Muted", True))
-            self.tasks_layout.addWidget(button("Create a task", lambda: self.window.navigate("Tasks"), "Quiet"))
-        self.section(self.history_layout, "Conversations", "Chat")
-        for conversation in self.services.list_conversations()[:3]:
-            self.history_layout.addWidget(button(conversation.get("title", "Conversation"), lambda c=conversation: self.window.open_conversation(c["id"]), "Quiet"))
-        if not self.services.list_conversations():
-            self.history_layout.addWidget(label("Your first conversation starts here. Configure an AI provider in Integrations.", "Muted", True))
+            self.tasks_layout.addWidget(label("No open tasks due today.", "Muted"))
+        self.tasks_layout.addWidget(button("Create a task", lambda: self.window.navigate("Tasks"), "Quiet"))
+        self._daily_revision += 1
+        revision = self._daily_revision
+        enabled = self.services.settings.get("daily.enabled", False)
+        self.daily_panel.setVisible(enabled)
+        if enabled:
+            self.section(self.daily_layout, "Daily brief")
+            self.daily_layout.addWidget(label("Reading approved local sources…", "Muted"))
+            def work():
+                result = self.services.execute_tool("daily.brief", {})
+                if not result.ok:
+                    raise ValueError(result.error or "Daily brief unavailable.")
+                return result.data
+            def loaded(value):
+                if revision != self._daily_revision or self.window.closing:
+                    return
+                self.section(self.daily_layout, "Daily brief")
+                for section in value.get("sections", [])[:6]:
+                    self.daily_layout.addWidget(label(f"{section['source'].replace('_', ' ').title()} · "
+                        f"{len(section.get('items', []))} items · {section['status'].replace('_', ' ')}", "Muted", True))
+                self.daily_layout.addWidget(button("Read daily brief", lambda: self.window.open_adaptive("Daily brief"), "Quiet"))
+            def failed(message):
+                if revision == self._daily_revision and not self.window.closing:
+                    self.section(self.daily_layout, "Daily brief")
+                    self.daily_layout.addWidget(label(message, "Muted", True))
+            self.window.run_job(work, loaded, failed)
+        self.section(self.connections_layout, "AI model", "Integrations")
+        from jarvix.providers import DEFAULT_MODELS
+        provider = self.services.settings.get("provider", "openai")
+        names = {"openai": "OpenAI", "gemini": "Gemini", "ollama": "Ollama · local", "local": "Local endpoint", "auto": "Automatic routing"}
+        model = ("Configured role models" if provider == "auto" else
+                 self.services.settings.get("model." + provider, DEFAULT_MODELS.get(provider, "")) or "Choose a model")
+        self.connections_layout.addWidget(label(names.get(provider, provider)))
+        self.connections_layout.addWidget(label(model, "Code", True))
+        status = self.services.provider_status()
+        configured = status.get(provider) if provider != "auto" else any(status.values())
+        self.connections_layout.addWidget(label("Configured · health checked on request" if configured else "Not configured", "Muted", True))
+        self.connections_layout.addWidget(button("Inspect provider health", lambda: self.window.open_adaptive("Health"), "Quiet"))
+        self.section(self.automation_layout, "Background activity", "Automations")
+        workflows = self.services.workflows.list() if hasattr(self.services, "workflows") else []
+        active = sum(bool(row.get("enabled")) for row in workflows)
+        background = getattr(self.services, "background", None)
+        self.automation_layout.addWidget(label(f"{active} workflows enabled · " + ("Runtime active" if background and background.running else "Runtime idle"), "Muted", True))
+        unread = self.services.notifications.list(unread_only=True, limit=3)
+        for notification in unread:
+            self.automation_layout.addWidget(button(notification["title"], self.window.open_notifications, "Quiet"))
+        if not unread:
+            self.automation_layout.addWidget(label("No unread notifications.", "Muted"))
+        self.section(self.favorites_layout, "Applications", "Apps")
+        favorites = self.services.apps.list(favorites_only=True)["items"]
+        for app in favorites[:3]:
+            self.favorites_layout.addWidget(button("Open " + app["name"], lambda record=app:
+                self.window.open_capabilities("apps.open", {"id": record["id"]}), "Quiet"))
+        if not favorites:
+            self.favorites_layout.addWidget(label("Pin applications in Apps for quick access.", "Muted", True))
+        self.section(self.health_layout, "SYSTEM", "System")
+        telemetry = QHBoxLayout()
+        snapshot = self.window.snapshot
+        for name, value in (("CPU", f"{snapshot.get('cpu_percent', 0):.0f}%"),
+                            ("RAM", f"{snapshot.get('memory_percent', 0):.0f}%"),
+                            ("Memory", f"{snapshot.get('memory_used_gb', 0):.1f} / {snapshot.get('memory_total_gb', 0):.1f} GB")):
+            telemetry.addWidget(label(name, "Muted"))
+            telemetry.addWidget(label(value if snapshot else "Pending", "Code"))
+            telemetry.addSpacing(12)
+        telemetry.addStretch()
+        self.health_layout.addLayout(telemetry)
         self.section(self.recent_layout, "Files & projects", "Files")
         recent_files = self.services.list_files()[:3]
-        projects = self.services.list_projects()[:2]
-        for project in projects:
-            self.recent_layout.addWidget(label("▱  " + project["name"], wrap=True))
-        for file in recent_files:
-            self.recent_layout.addWidget(label("↳  " + file.get("name", Path(file["path"]).name), "Muted", True))
-        if not projects and not recent_files:
-            self.recent_layout.addWidget(label("Add a project or choose a folder to index. Jarvix only sees the locations you choose.", "Muted", True))
-        self.section(self.health_layout, "System health", "System")
-        snapshot = self.window.snapshot
-        if snapshot:
-            for name, value in (("CPU", snapshot.get("cpu_percent", 0)), ("Memory", snapshot.get("memory_percent", 0))):
-                row = QHBoxLayout()
-                row.addWidget(label(name, "Muted"))
-                row.addStretch()
-                row.addWidget(label(f"{value:.0f}%", "Accent"))
-                self.health_layout.addLayout(row)
-                bar = QProgressBar()
-                bar.setRange(0, 100)
-                bar.setValue(round(value))
-                bar.setTextVisible(False)
-                bar.setFixedHeight(5)
-                self.health_layout.addWidget(bar)
-        else:
-            self.health_layout.addWidget(label("Reading local system metrics…", "Muted"))
-        self.health_layout.addWidget(label("●  Local storage active", "Success"))
-        self.section(self.connections_layout, "AI connections", "Integrations")
-        status = self.services.provider_status()
-        provider = self.services.settings.get("provider", "openai")
-        self.connections_layout.addWidget(label("Selected · " + ("OpenAI" if provider == "openai" else "Gemini"), "Accent"))
-        for name in ("openai", "gemini"):
-            self.connections_layout.addWidget(label(f"{'●' if status.get(name) else '○'}  {'OpenAI' if name == 'openai' else 'Gemini'}  ·  {'Key configured' if status.get(name) else 'Not configured'}", "Muted"))
-        self.section(self.activity_layout, "Recent activity", "Activity")
-        activity = self.services.activity(4)
+        for record in recent_files:
+            self.recent_layout.addWidget(button(record.get("name", Path(record["path"]).name), lambda record=record:
+                self.window.open_capabilities("files.inspect", {"path": record["path"]}), "Quiet"))
+        if not recent_files:
+            self.recent_layout.addWidget(label("Choose a folder in Files to build an index.", "Muted", True))
+        self.recent_layout.addStretch()
+        self.section(self.history_layout, "Conversations", "Chat")
+        conversations = self.services.list_conversations()
+        for conversation in conversations[:3]:
+            self.history_layout.addWidget(button(conversation.get("title", "Conversation"), lambda record=conversation:
+                self.window.open_conversation(record["id"]), "Quiet"))
+        if not conversations:
+            self.history_layout.addWidget(label("No conversations yet.", "Muted"))
+        self.history_layout.addStretch()
+        self.section(self.activity_layout, "Actions", "Activity")
+        activity = self.services.activity(3)
         for item in activity:
             self.activity_layout.addWidget(label(item.get("summary", "Action recorded"), wrap=True))
             self.activity_layout.addWidget(label(pretty_date(item.get("created_at")), "Muted"))
         if not activity:
-            self.activity_layout.addWidget(label("Your actions and AI tool decisions will appear here.", "Muted", True))
-        self.section(self.workspace_layout, "Workspaces & routines")
-        for workspace in self.services.records.list("workspace")[:4]:
-            self.workspace_layout.addWidget(button(workspace["name"], lambda r=workspace:
-                self.window.open_capabilities("workspaces.launch", {"id": r["id"]}), "Quiet"))
-        workflows = self.services.workflows.list() if hasattr(self.services, "workflows") else []
-        for routine in [row for row in workflows if row.get("kind") == "routine"][:3]:
-            self.workspace_layout.addWidget(button(routine["name"], lambda r=routine:
-                self.window.open_capabilities("workflows.run", {"id": r["id"]}), "Quiet"))
-        self.workspace_layout.addWidget(button("Save current setup", lambda: self.window.open_capabilities("workspaces.capture"), "Quiet"))
-        self.workspace_layout.addWidget(button("Manage workspaces", self.window.open_workspaces, "Quiet"))
-        self.section(self.automation_layout, "Automation runtime", "Automations")
-        active = sum(bool(row.get("enabled")) for row in workflows)
-        background = getattr(self.services, "background", None)
-        self.automation_layout.addWidget(label(f"{active} enabled · {'Background runtime active' if background and background.running else 'Runtime idle'}", "Muted", True))
-        unread = self.services.notifications.list(unread_only=True, limit=3)
-        for notification in unread:
-            self.automation_layout.addWidget(button(notification["title"], self.window.open_notifications, "Quiet"))
-        self.section(self.favorites_layout, "Favorite applications", "Apps")
-        favorites = self.services.apps.list(favorites_only=True)["items"]
-        for app in favorites[:4]:
-            self.favorites_layout.addWidget(button(app["name"], lambda r=app:
-                self.window.open_capabilities("apps.open", {"id": r["id"]}), "Quiet"))
-        if not favorites:
-            self.favorites_layout.addWidget(label("Favorite applications in Apps for quick access.", "Muted", True))
+            self.activity_layout.addWidget(label("Jarvix actions will appear here.", "Muted"))
+        self.activity_layout.addStretch()
 
 
 class NotesPage(Page):
     title = "Notes"
-    subtitle = "Ideas and working notes, stored on this computer."
+    subtitle = "Local notes and working documents"
 
     def __init__(self, window):
         super().__init__(window)
@@ -293,12 +381,12 @@ class NotesPage(Page):
         splitter.addWidget(self.list)
         editor = QWidget()
         ed = QVBoxLayout(editor)
-        ed.setContentsMargins(8, 0, 0, 0)
-        ed.setSpacing(13)
+        ed.setContentsMargins(SPACE[1], 0, 0, 0)
+        ed.setSpacing(SPACE[1])
         self.title_edit = QLineEdit()
         self.title_edit.setPlaceholderText("Note title")
         self.body = QPlainTextEdit()
-        self.body.setPlaceholderText("Capture a thought. Your notes stay local until you choose to share a tool result.")
+        self.body.setPlaceholderText("Write a note…")
         self.title_edit.textChanged.connect(self.mark_dirty)
         self.body.textChanged.connect(self.mark_dirty)
         ed.addWidget(self.title_edit)
@@ -307,12 +395,12 @@ class NotesPage(Page):
         self.state = label("New note", "Muted")
         row.addWidget(self.state)
         row.addStretch()
-        row.addWidget(button("Delete", self.delete, "Danger"))
+        row.addWidget(button("Delete note", self.delete, "Danger"))
         row.addWidget(button("Save note", self.save, "Primary"))
         ed.addLayout(row)
         splitter.addWidget(editor)
         splitter.setSizes([260, 650])
-        self.layout.addWidget(splitter)
+        self.layout.addWidget(splitter, 1)
 
     def mark_dirty(self):
         if not self.loading:
@@ -391,21 +479,22 @@ class NotesPage(Page):
 
 class MemoryPage(Page):
     title = "Memory"
-    subtitle = "What Jarvix should remember. Explicit, inspectable, and yours to remove."
+    subtitle = "Explicit facts, sources and retention"
 
     def __init__(self, window):
         super().__init__(window)
-        intro, layout = panel()
-        layout.addWidget(label("Memory is intentional", "Heading"))
-        layout.addWidget(label("Nothing is remembered automatically. Saved facts stay local and are only accessed through approved tools.", "Muted", True))
+        self.layout.addWidget(label("Save a fact only when you want Jarvix to retain it. Temporary context is separate.", "Muted", True))
         row = QHBoxLayout()
         self.content = QLineEdit()
         self.content.setPlaceholderText("For example: Jarvix development is my main project.")
         self.content.returnPressed.connect(self.add)
         row.addWidget(self.content)
-        row.addWidget(button("Remember", self.add, "Primary"))
-        layout.addLayout(row)
-        self.layout.addWidget(intro)
+        row.addWidget(button("Save memory", self.add, "Primary"))
+        self.layout.addLayout(row)
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Search saved memories…")
+        self.search.textChanged.connect(self.refresh)
+        self.layout.addWidget(self.search)
         self.entries = table(["Remembered fact", "Created"])
         self.layout.addWidget(self.entries)
         actions = QHBoxLayout()
@@ -414,6 +503,8 @@ class MemoryPage(Page):
         actions.addStretch()
         actions.addWidget(button("Forget selected", self.delete, "Danger"))
         self.layout.addLayout(actions)
+        context_menu(self.entries, [("Inspect source and retention", self.explain, "search"),
+                                    ("Forget memory", self.delete, "trash")])
 
     def explain(self):
         row = selected_record(self.entries)
@@ -423,7 +514,10 @@ class MemoryPage(Page):
             self.window.notify("Select a memory to inspect its source, scope and retention.")
 
     def refresh(self):
-        fill_table(self.entries, self.services.list_memories(), ["content", lambda row: pretty_date(row.get("created_at"))])
+        rows = self.services.list_memories()
+        query = self.search.text().casefold()
+        fill_table(self.entries, [row for row in rows if query in row["content"].casefold()],
+                   ["content", lambda row: pretty_date(row.get("created_at"))])
 
     def add(self):
         value = self.content.text().strip()
@@ -440,13 +534,13 @@ class MemoryPage(Page):
 
 class TasksPage(Page):
     title = "Tasks"
-    subtitle = "Keep a clear next step. Reminders run while Jarvix is open."
+    subtitle = "Tasks and reminders"
 
     def __init__(self, window):
         super().__init__(window)
         row = QHBoxLayout()
         self.entry = QLineEdit()
-        self.entry.setPlaceholderText("What needs doing?")
+        self.entry.setPlaceholderText("Task title")
         self.entry.returnPressed.connect(self.add)
         self.due = QLineEdit()
         self.due.setPlaceholderText("Optional: YYYY-MM-DD HH:MM")
@@ -456,19 +550,34 @@ class TasksPage(Page):
         row.addWidget(self.due, 1)
         row.addWidget(button("Add task", self.add, "Primary"))
         self.layout.addLayout(row)
+        filters = QHBoxLayout()
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Search tasks…")
+        self.search.textChanged.connect(self.refresh)
+        filters.addWidget(self.search, 1)
+        self.view = QComboBox()
+        self.view.addItems(["All tasks", "Open tasks", "Completed tasks"])
+        self.view.currentIndexChanged.connect(self.refresh)
+        filters.addWidget(self.view)
+        self.layout.addLayout(filters)
         self.entries = table(["Task", "Status", "Reminder"])
         self.layout.addWidget(self.entries)
         actions = QHBoxLayout()
         self.count = label("", "Muted")
         actions.addWidget(self.count)
         actions.addStretch()
-        actions.addWidget(button("Delete", self.delete, "Danger"))
+        actions.addWidget(button("Delete task", self.delete, "Danger"))
         actions.addWidget(button("Mark complete", self.complete, "Primary"))
         self.layout.addLayout(actions)
+        context_menu(self.entries, [("Mark complete", self.complete, "check"), ("Delete task", self.delete, "trash")])
 
     def refresh(self):
         rows = self.services.list_tasks()
-        fill_table(self.entries, rows, ["title", "status", lambda row: pretty_date(row.get("due_at"))])
+        query = self.search.text().casefold()
+        displayed = [row for row in rows if query in row["title"].casefold()
+                     and (self.view.currentIndex() == 0
+                     or (row.get("status") in {"done", "completed"}) == (self.view.currentIndex() == 2))]
+        fill_table(self.entries, displayed, ["title", "status", lambda row: pretty_date(row.get("due_at"))])
         active = sum(row.get("status") not in ("done", "completed") for row in rows)
         self.count.setText(f"{active} open · {len(rows) - active} completed")
 
@@ -504,75 +613,151 @@ class TasksPage(Page):
 
 class FilesPage(Page):
     title = "Files"
-    subtitle = "A search index scoped to folders you choose. File contents are never bulk uploaded."
+    subtitle = "Indexed files inside approved folders"
 
     def __init__(self, window):
         super().__init__(window)
-        row = QHBoxLayout()
+        toolbar = QHBoxLayout()
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Find an indexed file…")
+        self.search.setPlaceholderText("Search indexed filenames…")
         self.search.textChanged.connect(self.refresh_files)
-        row.addWidget(self.search)
-        row.addWidget(button("Choose folder", self.choose_root))
+        toolbar.addWidget(self.search, 1)
+        self.file_type = QComboBox()
+        self.file_type.addItems(["All file types", "Documents", "Images", "Source code"])
+        self.file_type.currentIndexChanged.connect(self.refresh_files)
+        toolbar.addWidget(self.file_type)
+        toolbar.addWidget(button("Add folder access", self.choose_root))
         self.scan_button = button("Update index", self.scan, "Primary")
-        row.addWidget(self.scan_button)
-        self.layout.addLayout(row)
+        toolbar.addWidget(self.scan_button)
+        self.layout.addLayout(toolbar)
         self.roots = label("", "Muted", True)
         self.layout.addWidget(self.roots)
         scope = QHBoxLayout()
+        scope.addWidget(label("Folder", "Muted"))
         self.root_picker = QComboBox()
         self.root_picker.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
-        self.root_picker.setMinimumContentsLength(28)
+        self.root_picker.setMinimumContentsLength(20)
+        self.root_picker.currentIndexChanged.connect(self.refresh_files)
         scope.addWidget(self.root_picker, 1)
-        self.remove_root_button = button("Remove folder access", self.remove_root, "Quiet")
+        scope.addWidget(button("Browse folder", self.browse_folder, "Quiet"))
+        self.remove_root_button = button("Remove access", self.remove_root, "Quiet")
         scope.addWidget(self.remove_root_button)
         self.layout.addLayout(scope)
-        self.entries = table(["Name", "Location", "Size", "Modified"])
+        self.breadcrumb = label("Indexed files", "Code", True)
+        self.layout.addWidget(self.breadcrumb)
+        self.entries = table(["Name", "Folder", "Size", "Modified"])
+        self.entries.setProperty("sort_keys", ["name", "path", "size", "modified_at"])
+        self.entries.setSortingEnabled(True)
         self.entries.cellDoubleClicked.connect(self.show_file)
-        self.layout.addWidget(self.entries, 2)
-        document_row = QHBoxLayout()
+        self.entries.itemSelectionChanged.connect(self.update_selection)
+        self.layout.addWidget(self.entries, 3)
+        actions = QHBoxLayout()
         self.document_action = QComboBox()
-        for title, tool in (("Read with citations", "extract"), ("Search document", "search"),
-                            ("Ask document locally", "question"), ("Summarize excerpts", "summarize"),
-                            ("Headings", "sections"), ("Tables and cells", "tables")):
-            self.document_action.addItem(title, tool)
-        document_row.addWidget(self.document_action)
-        document_row.addWidget(button("Inspect selected", self.inspect_document))
-        document_row.addStretch()
-        document_row.addWidget(button("Use as context", self.use_file_context, "Quiet"))
-        self.layout.addLayout(document_row)
-        collection_row = QHBoxLayout()
-        collection_row.addWidget(button("Knowledge collections", lambda: self.window.open_capabilities("knowledge.list"), "Quiet"))
-        collection_row.addWidget(button("Create collection…", self.create_collection, "Quiet"))
-        collection_row.addWidget(button("Compare documents…", self.compare_documents, "Quiet"))
-        collection_row.addStretch()
-        self.layout.addLayout(collection_row)
+        for caption, tool in (("Read with citations", "extract"), ("Search document", "search"),
+                              ("Ask document locally", "question"), ("Summarize excerpts", "summarize"),
+                              ("Headings", "sections"), ("Tables and cells", "tables")):
+            self.document_action.addItem(caption, tool)
+        actions.addWidget(self.document_action)
+        actions.addWidget(button("Inspect document", self.inspect_document))
+        actions.addWidget(button("Open file", lambda: self.file_action("open"), "Quiet"))
+        actions.addWidget(button("Use as context", self.use_file_context, "Quiet"))
+        actions.addStretch()
+        knowledge = button("Knowledge collections", None, "Quiet")
+        menu = QMenu(knowledge)
+        for caption, callback in (("Browse collections", lambda: self.window.open_capabilities("knowledge.list")),
+                                  ("Create collection…", self.create_collection),
+                                  ("Compare documents…", self.compare_documents)):
+            menu.addAction(caption).triggered.connect(lambda _checked=False, action=callback: action())
+        knowledge.setMenu(menu)
+        actions.addWidget(knowledge)
+        self.layout.addLayout(actions)
+        context_menu(self.entries, [("Open file", lambda: self.file_action("open"), "file"),
+            ("Reveal in Explorer", lambda: self.file_action("reveal"), "folder"),
+            ("Copy path", lambda: self.file_action("copy_path"), "copy"),
+            ("Move file…", lambda: self.file_action("move"), "folder"),
+            ("Copy file…", lambda: self.file_action("copy"), "copy"),
+            ("Rename file…", lambda: self.file_action("rename"), "file"),
+            ("Send to Recycle Bin…", lambda: self.file_action("recycle"), "trash")])
         project_row = QHBoxLayout()
         project_row.addWidget(label("PROJECTS", "Eyebrow"))
         project_row.addStretch()
         project_row.addWidget(button("Register project", self.add_project, "Quiet"))
         self.layout.addLayout(project_row)
         self.projects = table(["Project", "Folder"])
-        self.projects.setMaximumHeight(190)
+        self.projects.setMaximumHeight(150)
         self.projects.cellDoubleClicked.connect(self.open_project)
+        context_menu(self.projects, [("Open project folder", self.open_selected_project, "folder"),
+                                    ("Inspect project", self.inspect_selected_project, "search")])
         self.layout.addWidget(self.projects, 1)
-        self.status = label("Double-click a file to inspect its indexed metadata; a project to open its folder.", "Muted", True)
+        self.status = label("Add folder access to index files. Right-click a file for actions.", "Muted", True)
         self.layout.addWidget(self.status)
 
     def refresh(self):
         roots = self.services.file_roots()
-        self.roots.setText("Search scope · Only approved folders are indexed." if roots else "No folders selected. Choose a folder to get started.")
+        self.roots.setText("Approved folders only · Contents stay local until disclosure is approved." if roots
+                           else "No folder access yet. Add a folder to build a local file index.")
         selected = self.root_picker.currentText()
+        self.root_picker.blockSignals(True)
         self.root_picker.clear()
         self.root_picker.addItems(roots)
         if selected in roots:
             self.root_picker.setCurrentText(selected)
+        self.root_picker.blockSignals(False)
         self.remove_root_button.setEnabled(bool(roots))
         self.refresh_files()
         fill_table(self.projects, self.services.list_projects(), ["name", "path"])
+        for index in range(self.projects.rowCount()):
+            self.projects.item(index, 0).setIcon(icon("projects"))
 
     def refresh_files(self):
-        fill_table(self.entries, self.services.list_files(self.search.text()), ["name", "path", lambda r: f"{r.get('size', 0) / 1024:.1f} KB", lambda r: pretty_date(r.get("modified_at"))])
+        if not hasattr(self, "entries"):
+            return
+        rows = self.services.list_files(self.search.text())
+        scope = self.root_picker.currentText()
+        if scope:
+            rows = [row for row in rows if Path(row["path"]).is_relative_to(Path(scope))]
+        groups = {1: {".txt", ".md", ".markdown", ".pdf", ".csv", ".json", ".docx", ".xlsx", ".pptx"},
+                  2: {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".svg"},
+                  3: {".py", ".js", ".ts", ".tsx", ".jsx", ".lua", ".luau", ".rs", ".go", ".cpp", ".h"}}
+        extensions = groups.get(self.file_type.currentIndex())
+        if extensions:
+            rows = [row for row in rows if Path(row["path"]).suffix.casefold() in extensions]
+        def folder_label(row):
+            folder = Path(row["path"]).parent
+            relative = str(folder.relative_to(Path(scope))) if scope else str(folder)
+            return Path(scope).name if relative == "." else relative
+        fill_table(self.entries, rows, ["name", folder_label,
+                   lambda row: f"{row.get('size', 0) / 1024:,.1f} KB", lambda row: pretty_date(row.get("modified_at"))])
+        for index in range(self.entries.rowCount()):
+            self.entries.item(index, 0).setIcon(icon("file"))
+            record = self.entries.item(index, 0).data(Qt.ItemDataRole.UserRole)
+            self.entries.item(index, 1).setToolTip(str(Path(record["path"]).parent))
+        self.breadcrumb.setText("Indexed files / " + (scope or "No approved folder"))
+        self.status.setText(f"{len(rows):,} indexed files · Right-click a file for actions." if rows
+                            else "No matching files. Change the filter or update the index.")
+
+    def update_selection(self):
+        row = selected_record(self.entries)
+        if row:
+            self.status.setText(row["path"])
+
+    def file_action(self, action):
+        row = selected_record(self.entries)
+        if not row:
+            self.window.notify("Select an indexed file first.")
+            return
+        arguments = {"source" if action in {"move", "copy"} else "path": row["path"]}
+        self.window.open_capabilities("files." + action, arguments)
+
+    def open_selected_project(self):
+        row = self.projects.currentRow()
+        if row >= 0:
+            self.open_project(row)
+
+    def inspect_selected_project(self):
+        row = selected_record(self.projects)
+        if row:
+            self.window.open_capabilities("intelligence.prepare", {"project_id": row["id"]})
 
     def choose_root(self):
         path = QFileDialog.getExistingDirectory(self, "Choose a folder Jarvix may index")
@@ -585,6 +770,13 @@ class FilesPage(Page):
         if path and self.guard(lambda: self.services.remove_file_root(path)):
             self.refresh()
             self.status.setText("Folder access removed and its indexed metadata cleared. Your files are unchanged.")
+
+    def browse_folder(self):
+        path = self.root_picker.currentText()
+        if path:
+            self.window.open_capabilities("files.list", {"path": path, "recursive": False})
+        else:
+            self.window.notify("Add an approved folder first.")
 
     def scan(self):
         self.scan_button.setEnabled(False)
@@ -664,28 +856,91 @@ class FilesPage(Page):
         self.window.open_folder(record["path"])
 
 
-class AppsPage(Page):
-    title = "Apps"
-    subtitle = "Register trusted applications. Jarvix launches explicit paths, never arbitrary shell commands."
+class ProjectsPage(Page):
+    title = "Projects"
+    subtitle = "Registered local projects and working folders"
 
     def __init__(self, window):
         super().__init__(window)
-        row = QHBoxLayout()
-        row.addWidget(label("Your application library", "Heading"))
-        row.addStretch()
-        row.addWidget(button("Register application", self.add, "Primary"))
-        self.layout.addLayout(row)
-        self.entries = table(["Application", "Executable"])
-        self.entries.cellDoubleClicked.connect(lambda *_: self.launch())
-        self.layout.addWidget(self.entries)
-        self.empty = label("", "Muted")
-        self.layout.addWidget(self.empty)
-        self.layout.addWidget(button("Launch selected  ↗", self.launch, "Primary"), alignment=Qt.AlignmentFlag.AlignRight)
+        toolbar = QHBoxLayout()
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Search project name or path…")
+        self.search.textChanged.connect(self.refresh)
+        toolbar.addWidget(self.search, 1)
+        toolbar.addWidget(button("Register project", lambda: window.open_capabilities("projects.create"), "Primary"))
+        self.layout.addLayout(toolbar)
+        self.entries = table(["Project", "Folder"])
+        self.entries.setProperty("sort_keys", ["name", "path"])
+        self.entries.setSortingEnabled(True)
+        self.entries.itemDoubleClicked.connect(lambda _: self.continue_project())
+        self.layout.addWidget(self.entries, 1)
+        context_menu(self.entries, [("Continue project", self.continue_project, "play"),
+                                    ("Inspect project", self.inspect, "search"),
+                                    ("Open project folder", self.open_folder, "folder")])
+        actions = QHBoxLayout()
+        self.status = label("", "Muted", True)
+        actions.addWidget(self.status, 1)
+        actions.addWidget(button("Open folder", self.open_folder, "Quiet"))
+        actions.addWidget(button("Inspect project", self.inspect, "Quiet"))
+        actions.addWidget(button("Continue project", self.continue_project, "Primary"))
+        self.layout.addLayout(actions)
 
     def refresh(self):
-        apps = self.services.list_apps()
+        query = self.search.text().casefold()
+        rows = [row for row in self.services.list_projects() if query in (row["name"] + " " + row["path"]).casefold()]
+        fill_table(self.entries, rows, ["name", "path"])
+        for index in range(self.entries.rowCount()):
+            self.entries.item(index, 0).setIcon(icon("projects"))
+        self.status.setText(f"{len(rows)} projects" if rows else "No projects yet. Register an approved folder to track its work.")
+
+    def inspect(self):
+        row = selected_record(self.entries)
+        if row:
+            self.window.open_capabilities("developer.project_inspect", {"path": row["path"]})
+
+    def open_folder(self):
+        row = selected_record(self.entries)
+        if row:
+            self.window.open_folder(row["path"])
+
+    def continue_project(self):
+        row = selected_record(self.entries)
+        if row:
+            self.window.open_capabilities("intelligence.prepare", {"project_id": row["id"]})
+
+
+class AppsPage(Page):
+    title = "Apps"
+    subtitle = "Registered applications and trusted executable paths"
+
+    def __init__(self, window):
+        super().__init__(window)
+        toolbar = QHBoxLayout()
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Search applications…")
+        self.search.textChanged.connect(self.refresh)
+        toolbar.addWidget(self.search, 1)
+        toolbar.addWidget(button("Discover installed apps", lambda: window.open_capabilities("apps.discover"), "Quiet"))
+        toolbar.addWidget(button("Register application", self.add, "Primary"))
+        self.layout.addLayout(toolbar)
+        self.entries = table(["Application", "Executable"])
+        self.entries.setSortingEnabled(True)
+        self.entries.cellDoubleClicked.connect(lambda *_: self.launch())
+        context_menu(self.entries, [("Launch application", self.launch, "play")])
+        self.layout.addWidget(self.entries, 1)
+        actions = QHBoxLayout()
+        self.empty = label("", "Muted")
+        actions.addWidget(self.empty, 1)
+        actions.addWidget(button("Launch application", self.launch, "Primary"))
+        self.layout.addLayout(actions)
+
+    def refresh(self):
+        query = self.search.text().casefold()
+        apps = [row for row in self.services.list_apps() if query in (row["name"] + " " + row["path"]).casefold()]
         fill_table(self.entries, apps, ["name", "path"])
-        self.empty.setText("Choose an executable to add your first application." if not apps else f"{len(apps)} registered applications")
+        for index in range(self.entries.rowCount()):
+            self.entries.item(index, 0).setIcon(icon("apps"))
+        self.empty.setText("Register an executable or discover installed apps." if not apps else f"{len(apps)} registered applications")
 
     def add(self):
         path, _ = QFileDialog.getOpenFileName(self, "Choose a trusted application", "", "Applications (*.exe);;All files (*)")
@@ -703,104 +958,224 @@ class AppsPage(Page):
 
 class SystemPage(Page):
     title = "System"
-    subtitle = "Live local resource usage. Metrics stay on this device."
+    subtitle = "Local resource usage · updates every 15 seconds"
 
     def __init__(self, window):
         super().__init__(window)
-        top = QHBoxLayout()
-        self.cpu, cpul = panel("CPU utilization")
-        self.cpu_value = label("—", "Metric")
-        cpul.addWidget(self.cpu_value)
-        self.memory, meml = panel("Memory pressure")
-        self.memory_value = label("—", "Metric")
+        telemetry = QHBoxLayout()
+        telemetry.setSpacing(SPACE[3])
+        self.cpu = QWidget()
+        cpu_layout = QVBoxLayout(self.cpu)
+        cpu_layout.setContentsMargins(0, 0, 0, 0)
+        cpu_row = QHBoxLayout()
+        cpu_row.addWidget(label("CPU", "Heading"))
+        cpu_row.addStretch()
+        self.cpu_value = label("Pending", "Code")
+        cpu_row.addWidget(self.cpu_value)
+        cpu_layout.addLayout(cpu_row)
+        self.cpu_bar = QProgressBar()
+        self.cpu_bar.setTextVisible(False)
+        cpu_layout.addWidget(self.cpu_bar)
+        self.memory = QWidget()
+        memory_layout = QVBoxLayout(self.memory)
+        memory_layout.setContentsMargins(0, 0, 0, 0)
+        memory_row = QHBoxLayout()
+        memory_row.addWidget(label("RAM", "Heading"))
+        memory_row.addStretch()
+        self.memory_value = label("Pending", "Code")
+        memory_row.addWidget(self.memory_value)
+        memory_layout.addLayout(memory_row)
+        self.memory_bar = QProgressBar()
+        self.memory_bar.setTextVisible(False)
+        memory_layout.addWidget(self.memory_bar)
         self.memory_detail = label("", "Muted")
-        meml.addWidget(self.memory_value)
-        meml.addWidget(self.memory_detail)
-        top.addWidget(self.cpu)
-        top.addWidget(self.memory)
-        self.layout.addLayout(top)
-        row = QHBoxLayout()
-        row.addWidget(label("Highest memory usage", "Heading"))
-        row.addStretch()
-        row.addWidget(button("Refresh", self.window.refresh_system))
-        self.layout.addLayout(row)
+        memory_layout.addWidget(self.memory_detail)
+        telemetry.addWidget(self.cpu, 1)
+        telemetry.addWidget(self.memory, 1)
+        self.layout.addLayout(telemetry)
+        self.device_status = {}
+        details = QHBoxLayout()
+        for caption in ("GPU", "Battery", "Storage", "Network"):
+            column = QVBoxLayout()
+            column.addWidget(label(caption, "Heading"))
+            self.device_status[caption] = label("Not inspected", "Muted", True)
+            column.addWidget(self.device_status[caption])
+            column.addStretch()
+            details.addLayout(column, 1)
+        self.layout.addLayout(details)
+        toolbar = QHBoxLayout()
+        toolbar.addWidget(label("PROCESSES", "Eyebrow"))
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Filter the 20 highest-memory processes…")
+        self.search.textChanged.connect(self.refresh_processes)
+        toolbar.addWidget(self.search, 1)
+        toolbar.addWidget(button("Inspect CPU processes", lambda: window.open_capabilities("processes.search", {"sort": "cpu"})))
+        toolbar.addWidget(button("Refresh metrics", window.refresh_system, "Quiet"))
+        self.layout.addLayout(toolbar)
         self.processes = table(["Process", "PID", "Memory"])
-        self.layout.addWidget(self.processes)
-        self.layout.addWidget(label("Updated every 15 seconds while Jarvix is open. Process names may require operating-system access.", "Muted", True))
+        self.processes.setProperty("sort_keys", ["name", "pid", "memory_mb"])
+        self.processes.setSortingEnabled(True)
+        self.processes.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.processes.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.processes.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.layout.addWidget(self.processes, 1)
+        context_menu(self.processes, [("Inspect process", self.inspect_process, "search")])
+        self.status = label("Memory ranking includes accessible running processes. Command arguments are excluded.", "Muted", True)
+        self.layout.addWidget(self.status)
+        self._details_busy = False
+        self._details_updated = None
 
     def refresh(self):
         snapshot = self.window.snapshot
-        if not snapshot:
+        if snapshot:
+            self.cpu_value.setText(f"{snapshot.get('cpu_percent', 0):.1f}%")
+            self.memory_value.setText(f"{snapshot.get('memory_percent', 0):.1f}%")
+            self.cpu_bar.setValue(round(snapshot.get("cpu_percent", 0)))
+            self.memory_bar.setValue(round(snapshot.get("memory_percent", 0)))
+            self.memory_detail.setText(f"{snapshot.get('memory_used_gb', 0):.1f} GB used / {snapshot.get('memory_total_gb', 0):.1f} GB installed")
+            self.refresh_processes()
+        if (not self.isVisible() or self._details_busy or self.window.closing
+                or self._details_updated and (datetime.now() - self._details_updated).total_seconds() < 30):
             return
-        self.cpu_value.setText(f"{snapshot.get('cpu_percent', 0):.1f}%")
-        self.memory_value.setText(f"{snapshot.get('memory_percent', 0):.1f}%")
-        self.memory_detail.setText(f"{snapshot.get('memory_used_gb', 0):.1f} GB used / {snapshot.get('memory_total_gb', 0):.1f} GB installed")
-        fill_table(self.processes, snapshot.get("processes", []), ["name", "pid", lambda r: f"{r.get('memory_mb', 0):,.1f} MB"])
+        self._details_busy = True
+        for widget in self.device_status.values():
+            widget.setText("Inspecting…")
+        def work():
+            return {name: self.services.execute_tool("system." + tool, {})
+                    for name, tool in (("GPU", "gpu"), ("Battery", "battery"), ("Storage", "storage"), ("Network", "network"))}
+        def loaded(values):
+            self._details_busy = False
+            self._details_updated = datetime.now()
+            if self.window.closing:
+                return
+            for name, result in values.items():
+                if not result.ok:
+                    self.device_status[name].setText("Unavailable · " + (result.error or "Inspection failed"))
+                    continue
+                data = result.data
+                if name == "Battery":
+                    text = (f"{data.get('percent', 0):.0f}% · " + ("Charging" if data.get("charging") else "On battery")) if data.get("present") else "No battery reported"
+                elif name == "Storage":
+                    drives = data if isinstance(data, list) else data.get("items", [])
+                    text = "\n".join(f"{row['mountpoint']} · {row['free'] / 1073741824:.1f} GB free" for row in drives[:3]) or "No accessible drives"
+                elif name == "Network":
+                    adapters = [row["name"] for row in data.get("adapters", []) if row.get("connected")]
+                    text = ", ".join(adapters[:3]) or "No connected adapter"
+                else:
+                    adapters = data if isinstance(data, list) else data.get("adapters", data.get("items", []))
+                    text = ", ".join(dict.fromkeys(str(row.get("name", row.get("Name", "Unknown adapter")))
+                                                   for row in adapters[:3])) or "No adapter reported"
+                self.device_status[name].setText(text)
+        def failed(message):
+            self._details_busy = False
+            if not self.window.closing:
+                for widget in self.device_status.values():
+                    widget.setText("Unavailable · " + message)
+        self.window.run_job(work, loaded, failed)
+
+    def refresh_processes(self):
+        query = self.search.text().casefold()
+        rows = [row for row in self.window.snapshot.get("processes", []) if query in row.get("name", "").casefold()]
+        fill_table(self.processes, rows, ["name", "pid", lambda row: f"{row.get('memory_mb', 0):,.1f} MB"])
+
+    def inspect_process(self):
+        row = selected_record(self.processes)
+        if row:
+            self.window.open_capabilities("processes.details", {"pid": row["pid"]})
 
 
 class ActivityPage(Page):
     title = "Activity"
-    subtitle = "An inspectable history of Jarvix actions, tool decisions, and local changes."
+    subtitle = "Tools, permissions and local changes"
 
     def __init__(self, window):
         super().__init__(window)
+        toolbar = QHBoxLayout()
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Search recorded actions…")
+        self.search.textChanged.connect(self.refresh)
+        toolbar.addWidget(self.search, 1)
+        self.kind = QComboBox()
+        self.kind.addItem("All action types", "")
+        self.kind.currentIndexChanged.connect(self.refresh)
+        toolbar.addWidget(self.kind)
+        toolbar.addWidget(button("Refresh activity", self.refresh, "Quiet"))
+        self.layout.addLayout(toolbar)
         self.entries = table(["When", "Type", "Action"])
-        self.layout.addWidget(self.entries)
-        self.layout.addWidget(button("Refresh activity", self.refresh), alignment=Qt.AlignmentFlag.AlignRight)
+        self.entries.setSortingEnabled(True)
+        self.layout.addWidget(self.entries, 1)
+        self.status = label("", "Muted")
+        self.layout.addWidget(self.status)
 
     def refresh(self):
-        fill_table(self.entries, self.services.activity(200), [lambda r: pretty_date(r.get("created_at")), "kind", "summary"])
+        rows = self.services.activity(200)
+        current = self.kind.currentData()
+        self.kind.blockSignals(True)
+        self.kind.clear()
+        self.kind.addItem("All action types", "")
+        for kind in sorted({row.get("kind", "") for row in rows}):
+            self.kind.addItem(kind.replace("_", " ").title(), kind)
+        self.kind.setCurrentIndex(max(0, self.kind.findData(current)))
+        self.kind.blockSignals(False)
+        query = self.search.text().casefold()
+        kind = self.kind.currentData()
+        shown = [row for row in rows if (not kind or row.get("kind") == kind)
+                 and query in row.get("summary", "").casefold()]
+        fill_table(self.entries, shown, [lambda row: pretty_date(row.get("created_at")), "kind", "summary"])
+        self.status.setText(f"{len(shown)} actions · Showing the latest 200 local records" if shown
+                            else "No matching activity. Jarvix records tools, confirmations and local changes here.")
 
 
 class IntegrationsPage(Page):
     title = "Integrations"
-    subtitle = "Connect an AI provider. Credentials are stored in your operating system's credential vault."
+    subtitle = "AI credentials and account connections"
 
     def __init__(self, window):
         super().__init__(window)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
         body = QWidget()
         content = QVBoxLayout(body)
-        content.setContentsMargins(0, 0, 6, 0)
-        content.setSpacing(18)
+        content.setContentsMargins(0, 0, 0, 0)
+        content.setSpacing(SPACE[2])
         scroll.setWidget(body)
-        self.layout.addWidget(scroll)
+        self.layout.addWidget(scroll, 1)
+        content.addWidget(label("AI PROVIDERS", "Eyebrow"))
         self.status_labels = {}
         self.keys = {}
-        for provider, name, description in (("openai", "OpenAI", "Tool-capable models through the OpenAI API."), ("gemini", "Gemini", "Google Gemini models with structured function calling.")):
-            frame, layout = panel()
+        for provider, name in (("openai", "OpenAI"), ("gemini", "Gemini")):
             row = QHBoxLayout()
             row.addWidget(label(name, "Heading"))
-            row.addStretch()
-            status = label("", "Muted")
-            self.status_labels[provider] = status
-            row.addWidget(status)
-            layout.addLayout(row)
-            layout.addWidget(label(description, "Muted"))
-            entry = QHBoxLayout()
+            state = label("", "Muted")
+            self.status_labels[provider] = state
+            row.addWidget(state)
             key = QLineEdit()
             key.setEchoMode(QLineEdit.EchoMode.Password)
-            key.setPlaceholderText(f"Enter {name} API key")
+            key.setPlaceholderText(f"{name} API key · stored in OS vault")
+            key.setAccessibleName(name + " API key")
             self.keys[provider] = key
-            entry.addWidget(key)
-            entry.addWidget(button("Save key", lambda p=provider: self.save(p), "Primary"))
-            entry.addWidget(button("Remove", lambda p=provider: self.remove(p), "Quiet"))
-            layout.addLayout(entry)
-            content.addWidget(frame)
-        future, layout = panel("Account integrations")
+            row.addWidget(key, 1)
+            row.addWidget(button("Save key", lambda name=provider: self.save(name), "Primary"))
+            row.addWidget(button("Remove key", lambda name=provider: self.remove(name), "Quiet"))
+            content.addLayout(row)
+        content.addWidget(label("Configured keys are verified by the provider on the next request.", "Muted", True))
+        content.addWidget(label("ACCOUNTS", "Eyebrow"))
+        accounts = QWidget()
+        layout = QVBoxLayout(accounts)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(SPACE[1])
         self.account_status = table(["Service", "Connection", "Adapter"])
-        self.account_status.setMinimumHeight(255)
+        self.account_status.setMinimumHeight(180)
         layout.addWidget(self.account_status)
-        layout.addWidget(label("Account adapters remain disconnected until an implementation and authorized credentials are configured. No account data is fetched automatically.", "Muted", True))
-        content.addWidget(future)
-        content.addWidget(label("A configured key has not necessarily been verified. The first AI request validates it with the selected provider.", "Muted", True))
+        layout.addWidget(label("Account adapters remain disconnected until an account is verified. No account data is fetched automatically.", "Muted", True))
+        content.addWidget(accounts)
         content.addStretch()
 
     def refresh(self):
         statuses = self.services.provider_status()
         for provider, widget in self.status_labels.items():
-            widget.setText("● Key configured" if statuses.get(provider) else "○ Not configured")
+            widget.setText("Key configured" if statuses.get(provider) else "Not configured")
         fill_table(self.account_status, self.services.integrations.status(),
                    ["name", "status", lambda row: "Available" if row["adapter_available"] else "Not installed"])
 
@@ -820,46 +1195,36 @@ class IntegrationsPage(Page):
 
 class VoicePage(Page):
     title = "Voice"
-    subtitle = "A local voice for your assistant, with explicit playback controls."
+    subtitle = "Local dictation and speech playback"
 
     def __init__(self, window):
         super().__init__(window)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
         body = QWidget()
         content = QVBoxLayout(body)
-        content.setContentsMargins(0, 0, 6, 0)
-        content.setSpacing(18)
+        content.setContentsMargins(0, 0, 0, 0)
+        content.setSpacing(SPACE[2])
         scroll.setWidget(body)
-        self.layout.addWidget(scroll)
-        frame, layout = panel()
-        top = QHBoxLayout()
-        top.addWidget(SignalOrb(90))
-        words = QVBoxLayout()
-        words.addWidget(label("Read aloud", "Heading"))
-        words.addWidget(label("Uses the operating system's speech engine. No voice recording is uploaded.", "Muted", True))
-        top.addLayout(words)
-        top.addStretch()
-        layout.addLayout(top)
+        self.layout.addWidget(scroll, 1)
+        content.addWidget(label("SPEECH OUTPUT", "Eyebrow"))
+        content.addWidget(label("The operating system reads this text locally. No recording is uploaded.", "Muted", True))
         self.text = QPlainTextEdit()
-        self.text.setPlaceholderText("Paste text here, or use Read aloud on a chat answer.")
-        self.text.setMinimumHeight(170)
-        layout.addWidget(self.text)
+        self.text.setPlaceholderText("Text to read aloud…")
+        self.text.setMinimumHeight(130)
+        content.addWidget(self.text)
         row = QHBoxLayout()
         self.status = label("Ready for playback", "Muted")
-        row.addWidget(self.status)
-        row.addStretch()
+        row.addWidget(self.status, 1)
         row.addWidget(button("Stop speaking", self.stop))
         row.addWidget(button("Read aloud", self.speak, "Primary"))
-        layout.addLayout(row)
-        content.addWidget(frame)
-        frame, layout = panel("Voice input")
+        content.addLayout(row)
+        content.addWidget(label("SPEECH INPUT", "Eyebrow"))
         from .voice_input import VoiceInputPanel
         self.input_panel = VoiceInputPanel(window)
-        layout.addWidget(self.input_panel)
-        content.addWidget(frame)
+        content.addWidget(self.input_panel)
         content.addStretch()
-
         self.status_timer = QTimer(self)
         self.status_timer.setInterval(250)
         self.status_timer.timeout.connect(self.refresh)
@@ -889,58 +1254,83 @@ class VoicePage(Page):
 
 class AutomationsPage(Page):
     title = "Automations"
-    subtitle = "Build ordered workflows. Jarvix keeps permissions and progress visible."
+    subtitle = "Workflows, routines and recurring checks"
 
     def __init__(self, window):
         super().__init__(window)
+        self.tabs = QTabWidget()
+        self.layout.addWidget(self.tabs, 1)
+        workflows = QWidget()
+        workflow_layout = QVBoxLayout(workflows)
+        workflow_layout.setContentsMargins(0, SPACE[2], 0, 0)
         toolbar = QHBoxLayout()
-        toolbar.addWidget(button("+ Build workflow", self.window.open_workflow_builder, "Primary"))
-        toolbar.addWidget(button("Create through chat", lambda: self.window.open_chat(
-            "Help me create an automation. Show its trigger, conditions and actions before saving.", send=False)))
-        toolbar.addWidget(button("Import", self.import_workflow, "Quiet"))
-        toolbar.addStretch()
-        self.layout.addLayout(toolbar)
         self.workflow_search = QLineEdit()
         self.workflow_search.setPlaceholderText("Search workflows and routines…")
         self.workflow_search.textChanged.connect(self.refresh_workflows)
-        self.layout.addWidget(self.workflow_search)
+        toolbar.addWidget(self.workflow_search, 1)
+        toolbar.addWidget(button("Build workflow", self.window.open_workflow_builder, "Primary"))
+        more = button("Workflow actions", None, "Quiet")
+        menu = QMenu(more)
+        for caption, callback in (("Create workflow through chat", lambda: self.window.open_chat(
+                "Help me create an automation. Show its trigger, conditions and actions before saving.", send=False)),
+                ("Import workflow", self.import_workflow),
+                ("Duplicate selected workflow", lambda: self.workflow_action("duplicate")),
+                ("Export selected workflow", lambda: self.workflow_action("export"))):
+            menu.addAction(caption).triggered.connect(lambda _checked=False, action=callback: action())
+        more.setMenu(menu)
+        toolbar.addWidget(more)
+        workflow_layout.addLayout(toolbar)
         self.workflow_entries = table(["Workflow", "Trigger", "State", "Next run"])
         self.workflow_entries.itemDoubleClicked.connect(lambda _item: self.edit_workflow())
-        self.layout.addWidget(self.workflow_entries, 1)
+        workflow_layout.addWidget(self.workflow_entries, 1)
         actions = QHBoxLayout()
-        for caption, callback in (("Edit", self.edit_workflow), ("Run", lambda: self.workflow_action("run")),
-                                  ("Test", lambda: self.workflow_action("test")), ("History", self.workflow_history),
-                                  ("Enable / disable", self.toggle_workflow), ("Duplicate", lambda: self.workflow_action("duplicate")),
-                                  ("Export", lambda: self.workflow_action("export"))):
-            actions.addWidget(button(caption, callback, "Quiet"))
-        self.layout.addLayout(actions)
-        frame, layout = panel("Simple recurring checks")
-        self.name = QLineEdit()
-        self.name.setPlaceholderText("Routine name")
-        layout.addWidget(self.name)
+        self.workflow_count = label("", "Muted", True)
+        actions.addWidget(self.workflow_count, 1)
+        for caption, callback in (("Edit workflow", self.edit_workflow),
+                                  ("Test workflow", lambda: self.workflow_action("test")),
+                                  ("Run history", self.workflow_history),
+                                  ("Enable / disable", self.toggle_workflow),
+                                  ("Run workflow", lambda: self.workflow_action("run"))):
+            actions.addWidget(button(caption, callback, "Primary" if caption == "Run workflow" else "Quiet"))
+        workflow_layout.addLayout(actions)
+        context_menu(self.workflow_entries, [("Edit workflow", self.edit_workflow, "automations"),
+            ("Run workflow", lambda: self.workflow_action("run"), "play"),
+            ("Test workflow", lambda: self.workflow_action("test"), "check"),
+            ("View run history", self.workflow_history, "activity"),
+            ("Enable / disable workflow", self.toggle_workflow, "pause")])
+        self.tabs.addTab(workflows, "Workflows && routines")
+        recurring = QWidget()
+        recurring_layout = QVBoxLayout(recurring)
+        recurring_layout.setContentsMargins(0, SPACE[2], 0, 0)
+        recurring_layout.addWidget(label("Recurring read-only checks", "Heading"))
+        recurring_layout.addWidget(label("Local tools only. Permissions remain enforced on each run.", "Muted", True))
         row = QHBoxLayout()
+        self.name = QLineEdit()
+        self.name.setPlaceholderText("Check name")
+        row.addWidget(self.name, 1)
         self.tool = QComboBox()
         self.tool.addItems(["system.status", "system.processes", "tasks.list", "projects.list"])
-        row.addWidget(self.tool, 2)
+        row.addWidget(self.tool, 1)
         row.addWidget(label("Every", "Muted"))
         self.interval = QSpinBox()
         self.interval.setRange(1, 10080)
         self.interval.setValue(60)
         self.interval.setSuffix(" minutes")
         row.addWidget(self.interval)
-        row.addWidget(button("Add check", self.add))
-        layout.addLayout(row)
-        layout.addWidget(label("Only safe, read-only local tools are allowed for unattended runs. Activity records each outcome; the latest result is available below.", "Muted", True))
-        self.layout.addWidget(frame)
-        self.entries = table(["Routine", "Tool", "Interval", "State", "Last run"])
-        self.entries.setMaximumHeight(155)
-        self.layout.addWidget(self.entries)
-        row = QHBoxLayout()
-        row.addStretch()
-        row.addWidget(button("View last result", self.view_result))
-        row.addWidget(button("Delete", self.delete, "Danger"))
-        row.addWidget(button("Pause / resume", self.toggle))
-        self.layout.addLayout(row)
+        row.addWidget(button("Create check", self.add, "Primary"))
+        recurring_layout.addLayout(row)
+        self.entries = table(["Check", "Tool", "Interval", "State", "Last run"])
+        recurring_layout.addWidget(self.entries, 1)
+        actions = QHBoxLayout()
+        actions.addStretch()
+        actions.addWidget(button("View last result", self.view_result))
+        actions.addWidget(button("Delete check", self.delete, "Danger"))
+        actions.addWidget(button("Pause / resume check", self.toggle))
+        recurring_layout.addLayout(actions)
+        context_menu(self.entries, [("View last result", self.view_result, "search"),
+                                    ("Pause / resume check", self.toggle, "pause"),
+                                    ("Delete check", self.delete, "trash")])
+        self.tabs.addTab(recurring, "Recurring checks")
 
     def refresh(self):
         self.refresh_workflows()
@@ -951,6 +1341,7 @@ class AutomationsPage(Page):
         query = self.workflow_search.text().casefold()
         rows = [row for row in rows if query in (row["name"] + " " + row["trigger"]).casefold()]
         current = selected_record(self.workflow_entries)
+        self.workflow_count.setText(f"{len(rows)} workflows" if rows else "No workflows yet. Build a reviewed sequence of actions.")
         fill_table(self.workflow_entries, rows, ["name", "trigger", lambda row: "Enabled" if row["enabled"] else "Disabled",
                                                 lambda row: pretty_date(row.get("next_run"))])
         if current:
@@ -1015,130 +1406,171 @@ class AutomationsPage(Page):
 
 class SettingsPage(Page):
     title = "Settings"
-    subtitle = "Configure your assistant and inspect its local boundaries."
+    subtitle = "Preferences and local access"
 
     def __init__(self, window):
         super().__init__(window)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        body = QWidget()
-        layout = QVBoxLayout(body)
-        layout.setContentsMargins(0, 0, 6, 0)
-        layout.setSpacing(18)
-        scroll.setWidget(body)
-        self.layout.addWidget(scroll)
-        frame, form = panel("AI defaults")
+        splitter = QSplitter()
+        self.categories = QListWidget()
+        self.settings_stack = QStackedWidget()
+        self.settings_sections = {}
+        definitions = (("AI & models", "chat", "Provider defaults and model routing"),
+                       ("Privacy & control", "settings", "Explicit access. Sensitive actions always require fresh confirmation."),
+                       ("Files & storage", "files", "Approved folders, local profile and backups"),
+                       ("Voice", "voice", "Local microphone and speech playback"),
+                       ("Browser", "link", "Explicit browser bridge connection"),
+                       ("Automations", "automations", "Configured workflows and notification behavior"),
+                       ("Appearance", "settings", "Native desktop navigation and window behavior"),
+                       ("Advanced", "terminal", "Capability availability, storage protection and diagnostics"))
+        for title, symbol, description in definitions:
+            self.categories.addItem(QListWidgetItem(icon(symbol), title))
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setFrameShape(QFrame.Shape.NoFrame)
+            body = QWidget()
+            content = QVBoxLayout(body)
+            content.setContentsMargins(SPACE[3], 0, SPACE[1], 0)
+            content.setSpacing(SPACE[2])
+            content.addWidget(label(title, "Heading"))
+            content.addWidget(label(description, "Muted", True))
+            self.settings_sections[title] = content
+            scroll.setWidget(body)
+            self.settings_stack.addWidget(scroll)
+        self.categories.ensurePolished()
+        self.categories.setMinimumWidth(self.categories.sizeHintForColumn(0) + SPACE[2])
+        self.categories.currentRowChanged.connect(self.settings_stack.setCurrentIndex)
+        self.categories.setCurrentRow(0)
+        splitter.addWidget(self.categories)
+        splitter.addWidget(self.settings_stack)
+        splitter.setChildrenCollapsible(False)
+        splitter.setSizes([170, 800])
+        self.layout.addWidget(splitter, 1)
+        ai = self.settings_sections["AI & models"]
         self.provider = QComboBox()
         self.provider.addItems(["openai", "gemini", "ollama", "local", "auto"])
         self.openai_model = QLineEdit()
         self.gemini_model = QLineEdit()
-        for name, widget in (("Default provider", self.provider), ("OpenAI model", self.openai_model), ("Gemini model", self.gemini_model)):
-            row = QHBoxLayout()
-            caption = label(name, "Muted")
-            caption.setMinimumWidth(140)
-            row.addWidget(caption)
-            row.addWidget(widget)
-            form.addLayout(row)
-        self.rate = QSpinBox()
-        self.rate.setRange(80, 300)
-        self.rate.setSuffix(" words / min")
-        self.rate.setToolTip("80–300 words per minute; Windows speech uses an approximate pace mapping.")
-        row = QHBoxLayout()
-        row.addWidget(label("Speech rate", "Muted"))
-        row.addStretch()
-        row.addWidget(self.rate)
-        form.addLayout(row)
-        layout.addWidget(frame)
-        frame, adaptive = panel("Local intelligence & extensions")
-        adaptive.addWidget(label("Configure local model endpoints and task routing, search cited local knowledge, and review declarative extensions.", "Muted", True))
-        adaptive.addWidget(button("Knowledge, search, models & extensions", self.window.open_adaptive))
-        self.local_only = QCheckBox("Local-only AI: block cloud model requests")
-        adaptive.addWidget(self.local_only)
-        self.prefer_local = QCheckBox("Prefer local models when routing automatically")
-        adaptive.addWidget(self.prefer_local)
+        self.local_only = QCheckBox("Enabled")
+        self.prefer_local = QCheckBox("Enabled")
         self.routing_cost = QComboBox()
         self.routing_cost.addItems(["balanced", "low"])
         self.routing_cost.setToolTip("Unknown provider pricing is never treated as free.")
-        adaptive.addWidget(label("Routing cost preference", "Muted"))
-        adaptive.addWidget(self.routing_cost)
-        adaptive.addWidget(button("Review storage protection", lambda: self.window.open_capabilities("storage.configure_protection")))
-        adaptive.addWidget(button("Windows startup status", lambda: self.window.open_capabilities("windows.startup")))
-        layout.addWidget(frame)
-        frame, controls = panel("Computer access & notifications")
-        controls.addWidget(label("Sensitive actions always need confirmation immediately before execution. Microphone, screen, and clipboard access are opt-in.", "Muted", True))
+        self.setting_row(ai, "Default provider", self.provider)
+        self.setting_row(ai, "OpenAI model", self.openai_model)
+        self.setting_row(ai, "Gemini model", self.gemini_model)
+        self.setting_row(ai, "Local-only AI", self.local_only, "Block requests to cloud models.")
+        self.setting_row(ai, "Prefer local models", self.prefer_local, "Used when routing automatically.")
+        self.setting_row(ai, "Routing cost", self.routing_cost)
+        ai.addWidget(button("Configure local models and routing", lambda: window.open_adaptive("Models"), "Quiet"))
+        ai.addWidget(button("Manage AI credentials", lambda: window.navigate("Integrations"), "Quiet"))
         self.access_checks = {}
         self.access_defaults = {
             "control.enabled": False, "clipboard.enabled": False,
             "screenshots.enabled": False, "microphone.enabled": False,
             "automations.enabled": True, "notifications.quiet": False,
             "notifications.dnd": False, "tray.enabled": False,
-            "voice.responses": False,
-            "context.enabled": False, "overlay.enabled": False,
-            "windows.recent.enabled": False,
+            "voice.responses": False, "context.enabled": False,
+            "overlay.enabled": False, "windows.recent.enabled": False,
         }
-        for key, caption in (
-            ("control.enabled", "Allow reversible computer actions without individual prompts"),
-            ("clipboard.enabled", "Allow clipboard tools (manual access only)"),
-            ("screenshots.enabled", "Allow screenshots on request"),
-            ("microphone.enabled", "Allow local microphone dictation"),
-            ("automations.enabled", "Enable configured automations while Jarvix is running"),
-            ("notifications.quiet", "Quiet notifications"),
-            ("notifications.dnd", "Do not disturb"),
-            ("tray.enabled", "Minimize to system tray when closing"),
-            ("voice.responses", "Read AI responses aloud automatically"),
-            ("context.enabled", "Allow explicit active-window context requests"),
-            ("overlay.enabled", "Enable the global quick-command overlay shortcut"),
-            ("windows.recent.enabled", "Allow explicit Windows Recent file requests inside approved roots"),
+        for category, key, caption, description in (
+            ("Privacy & control", "control.enabled", "Reversible computer actions", "Allow normal control actions without individual prompts."),
+            ("Privacy & control", "clipboard.enabled", "Clipboard tools", "Manual requests only. No clipboard monitoring."),
+            ("Privacy & control", "screenshots.enabled", "Screenshots", "Capture only when requested."),
+            ("Privacy & control", "context.enabled", "Active-window context", "Allow explicit context snapshots."),
+            ("Voice", "microphone.enabled", "Local microphone", "Enable reviewed dictation and local listening."),
+            ("Voice", "voice.responses", "Spoken responses", "Read AI responses aloud automatically."),
+            ("Automations", "automations.enabled", "Background workflows", "Run configured automations while Jarvix is running."),
+            ("Automations", "notifications.quiet", "Quiet notifications", "Suppress normal notification popups."),
+            ("Automations", "notifications.dnd", "Do not disturb", "Pause notification interruptions."),
+            ("Appearance", "tray.enabled", "Close to system tray", "Keep approved background work running after closing the window."),
+            ("Appearance", "overlay.enabled", "Global command overlay", "Open a command field over the current application."),
+            ("Files & storage", "windows.recent.enabled", "Windows Recent items", "Explicit requests remain limited to approved folders."),
         ):
-            check = QCheckBox(caption)
-            controls.addWidget(check)
+            check = QCheckBox("Enabled")
+            check.setAccessibleName(caption)
             self.access_checks[key] = check
-        from .overlay import HOTKEYS
-        overlay_row = QHBoxLayout()
-        overlay_row.addWidget(label("Overlay shortcut", "Muted"))
-        self.overlay_hotkey = QComboBox()
-        self.overlay_hotkey.addItems(list(HOTKEYS))
-        overlay_row.addWidget(self.overlay_hotkey)
-        controls.addLayout(overlay_row)
-        voice_row = QHBoxLayout()
-        voice_row.addWidget(label("Speech voice", "Muted"))
+            self.setting_row(self.settings_sections[category], caption, check, description)
+        voice = self.settings_sections["Voice"]
+        self.rate = QSpinBox()
+        self.rate.setRange(80, 300)
+        self.rate.setSuffix(" words / min")
+        self.rate.setToolTip("Windows speech uses an approximate mapping to this pace.")
+        self.setting_row(voice, "Speech rate", self.rate)
         self.speech_voice = QComboBox()
         self.speech_voice.addItem("System default", "")
-        voice_row.addWidget(self.speech_voice, 1)
-        voice_row.addWidget(button("Find voices", self.load_voices))
-        controls.addLayout(voice_row)
-        layout.addWidget(frame)
-        frame, tools_layout = panel("Enabled AI capabilities")
-        tools_layout.addWidget(label("Disabled tools are omitted from model requests. Enabling a tool does not bypass execution or disclosure approval.", "Muted", True))
+        self.setting_row(voice, "Speech voice", self.speech_voice)
+        voice.addWidget(button("Find installed voices", self.load_voices, "Quiet"))
+        voice.addWidget(button("Open voice controls", lambda: window.navigate("Voice"), "Quiet"))
+        appearance = self.settings_sections["Appearance"]
+        from .interface import add_interface_setting
+        add_interface_setting(self, appearance)
+        from .overlay import HOTKEYS
+        self.overlay_hotkey = QComboBox()
+        self.overlay_hotkey.addItems(list(HOTKEYS))
+        self.setting_row(appearance, "Overlay shortcut", self.overlay_hotkey)
+        self.setting_row(appearance, "Theme", label("Dark", "Muted"), "Native Windows text scaling is respected.")
+        browser = self.settings_sections["Browser"]
+        browser.addWidget(label("Browser access uses an explicitly connected Chrome or Edge bridge. Login and protected fields remain restricted.", "Muted", True))
+        browser.addWidget(button("Inspect browser connection", lambda: window.open_capabilities("browser.status"), "Quiet"))
+        automations = self.settings_sections["Automations"]
+        automations.addWidget(button("Manage workflows", lambda: window.navigate("Automations"), "Quiet"))
+        automations.addWidget(button("Review closed-app scheduling", lambda: window.open_capabilities("scheduler.list"), "Quiet"))
+        files = self.settings_sections["Files & storage"]
+        files.addWidget(button("Manage allowed folders", lambda: window.navigate("Files"), "Quiet"))
+        self.setting_row(files, "Profile location", label(str(self.services.data_dir), "Code", True))
+        self.setting_row(files, "Database location", label(str(self.services.data_dir / "jarvix.db"), "Code", True))
+        files.addWidget(label("Credentials remain in the operating-system vault and are excluded from ordinary backups.", "Muted", True))
+        storage_actions = QHBoxLayout()
+        storage_actions.addWidget(button("Create backup", self.create_backup, "Quiet"))
+        storage_actions.addWidget(button("Open data folder", self.open_data_folder, "Quiet"))
+        storage_actions.addStretch()
+        files.addLayout(storage_actions)
+        self.backup_status = label("Backup snapshots stay inside this profile.", "Muted", True)
+        files.addWidget(self.backup_status)
+        advanced = self.settings_sections["Advanced"]
+        actions = QHBoxLayout()
+        actions.addWidget(button("Inspect diagnostics", lambda: window.open_adaptive("Health"), "Quiet"))
+        actions.addWidget(button("Review storage protection", lambda: window.open_capabilities("storage.configure_protection"), "Quiet"))
+        actions.addWidget(button("Inspect Windows startup", lambda: window.open_capabilities("windows.startup"), "Quiet"))
+        actions.addStretch()
+        advanced.addLayout(actions)
+        advanced.addWidget(label("AI capabilities", "Heading"))
+        advanced.addWidget(label("Disabled capabilities are omitted from model requests. Enabling one does not grant execution or disclosure permission.", "Muted", True))
         self.tool_checks = {}
         self.tool_search = QLineEdit()
-        self.tool_search.setPlaceholderText("Filter capabilities by name…")
+        self.tool_search.setPlaceholderText("Filter capabilities…")
         self.tool_search.textChanged.connect(self.filter_tools)
-        tools_layout.addWidget(self.tool_search)
+        advanced.addWidget(self.tool_search)
         selection = QHBoxLayout()
-        selection.addWidget(button("Enable all", lambda: self.select_tools(True), "Quiet"))
-        selection.addWidget(button("Disable all", lambda: self.select_tools(False), "Quiet"))
+        selection.addWidget(button("Enable all capabilities", lambda: self.select_tools(True), "Quiet"))
+        selection.addWidget(button("Disable all capabilities", lambda: self.select_tools(False), "Quiet"))
         selection.addStretch()
-        tools_layout.addLayout(selection)
+        advanced.addLayout(selection)
         for spec in self.services.registry.specs():
             checkbox = QCheckBox(spec.name)
             checkbox.setToolTip(f"{spec.description}\nPermission: {spec.permission}\nLevel: {spec.permission_level or spec.risk}")
-            tools_layout.addWidget(checkbox)
+            advanced.addWidget(checkbox)
             self.tool_checks[spec.name] = checkbox
-        layout.addWidget(frame)
-        frame, storage = panel("Local storage")
-        storage.addWidget(label(str(self.services.data_dir), "Muted", True))
-        storage.addWidget(label("Notes, tasks, memories, settings, and conversation history are stored here. API credentials are kept separately in the operating-system vault.", "Muted", True))
-        storage_actions = QHBoxLayout()
-        storage_actions.addWidget(button("Create consistent backup", self.create_backup, "Quiet"))
-        storage_actions.addWidget(button("Open data folder  ↗", self.open_data_folder, "Quiet"))
-        storage_actions.addStretch()
-        storage.addLayout(storage_actions)
-        self.backup_status = label("Backups are stored locally in this profile and exclude API credentials.", "Muted", True)
-        storage.addWidget(self.backup_status)
-        layout.addWidget(frame)
-        layout.addStretch()
-        self.layout.addWidget(button("Save settings", self.save, "Primary"), alignment=Qt.AlignmentFlag.AlignRight)
+        for section in self.settings_sections.values():
+            section.addStretch()
+        footer = QHBoxLayout()
+        footer.addWidget(label("Changes apply after saving.", "Muted"))
+        footer.addStretch()
+        footer.addWidget(button("Save settings", self.save, "Primary"))
+        self.layout.addLayout(footer)
+
+    @staticmethod
+    def setting_row(layout, caption, control, description=""):
+        row = QHBoxLayout()
+        words = QVBoxLayout()
+        words.setSpacing(SPACE[0])
+        words.addWidget(label(caption))
+        if description:
+            words.addWidget(label(description, "Muted", True))
+        row.addLayout(words, 3)
+        row.addWidget(control, 2)
+        control.setAccessibleName(caption)
+        layout.addLayout(row)
 
     def refresh(self):
         settings = self.services.settings
@@ -1174,17 +1606,8 @@ class SettingsPage(Page):
         self.window.run_job(self.services.open_data_folder)
 
     def create_backup(self):
-        self.backup_status.setText("Creating a consistent local backup…")
-
-        def done(result):
-            size_kib = result["size_bytes"] / 1024
-            self.backup_status.setText(f"Backup created · {size_kib:,.1f} KiB · API credentials excluded.")
-            self.window.notify("Local backup created. Open the data folder to copy it elsewhere.")
-
-        def failed(message):
-            self.backup_status.setText(message)
-
-        self.window.run_job(self.services.create_backup, done, failed)
+        self.backup_status.setText("Review the bounded snapshot action; its result includes a restore-verification checksum.")
+        self.window.open_capabilities("backup.create")
 
     def filter_tools(self, text):
         for name, checkbox in self.tool_checks.items():

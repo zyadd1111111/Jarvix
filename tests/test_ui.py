@@ -55,6 +55,7 @@ def window(app, tmp_path, monkeypatch):
     instance.pages["Chat"].cancel()
     wait_until(app, lambda: not instance.jobs and not instance.pages["Chat"].busy)
     instance.close()
+    wait_until(app, lambda: not instance.isVisible() and not services.background.running, timeout=10)
     instance.deleteLater()
     QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
     app.processEvents()
@@ -295,7 +296,8 @@ def test_conversation_rename_pin_search_and_context_switch(window, monkeypatch):
     chat.pin_conversation()
     chat.history_search.setText("reusable operation")
     assert chat.history.count() == 1
-    assert chat.history.item(0).text().startswith("★ Python reference")
+    assert chat.history.item(0).text().startswith("Python reference")
+    assert not chat.history.item(0).icon().isNull()
     chat.on_activity("tool_result", {"name": "tasks.list", "data": []})
     assert chat.timeline.count() == 1
     chat.new_conversation()

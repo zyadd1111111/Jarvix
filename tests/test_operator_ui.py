@@ -245,7 +245,7 @@ def test_home_favorite_app_launch_uses_registered_permission_runner(window, tmp_
     home = window.pages["Home"]
     home.refresh()
     launch = next(control for control in home.favorites_panel.findChildren(QPushButton)
-                  if control.text() == "Favorite editor")
+                  if control.text() == "Open Favorite editor")
     launch.click()
     assert window.capability_dialog.selected_tool == "apps.open"
     assert window.capability_dialog.form.arguments() == {"id": app_id}
@@ -263,9 +263,8 @@ def test_home_today_tasks_exclude_other_days_and_completed_tasks(window):
     services.complete_task(completed)
     home = window.pages["Home"]
     home.refresh()
-    texts = [item.text() for index in range(home.tasks_layout.count())
-             if isinstance(item := home.tasks_layout.itemAt(index).widget(), QLabel)]
-    assert "○  Due today" in texts
+    texts = [item.text() for item in home.tasks_panel.findChildren(QLabel)]
+    assert "Due today" in texts
     assert not any(title in "\n".join(texts) for title in ("Tomorrow", "Yesterday", "No due date", "Already done"))
 
 

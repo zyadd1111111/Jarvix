@@ -34,7 +34,7 @@ WORKFLOW_HOTKEYS = {f"{prefix}+F{key}": (modifiers, 0x6F + key)
 # No UI input, arbitrary command execution, external send, or destructive action.
 BACKGROUND_OPT_IN = frozenset({
     "apps.open", "files.open_folder", "files.copy", "files.move", "files.create_folder",
-    "web.open", "tasks.create", "notes.create", "notifications.create",
+    "web.open", "tasks.create", "notes.create", "notifications.create", "backup.create",
 })
 RETRY_SAFE = frozenset({"tasks.list", "projects.list", "system.status", "system.processes",
                         "files.inspect", "files.list", "files.folder_summary", "apps.search"})
@@ -501,9 +501,10 @@ class WorkflowService:
                 if run["status"] != "paused":
                     run["status"] = "paused"
                     emit()
-                if control["cancel"].wait(.05):
-                    raise InterruptedError("Workflow cancelled.")
                 current = CURRENT.get()
+                # An inherited pause must also yield to the active child run's Cancel.
+                if control["cancel"].wait(.05) or (current and current.cancel.is_set()):
+                    raise InterruptedError("Workflow cancelled.")
                 if current and time.monotonic() > current.deadline:
                     raise InterruptedError("Workflow timed out.")
             if run["status"] == "paused":

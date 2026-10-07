@@ -6,19 +6,20 @@ from difflib import SequenceMatcher
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer, QByteArray, QObject, Signal
+from PySide6.QtCore import Qt, QTimer, QByteArray, QObject, Signal, QSize, QEvent
 from PySide6.QtGui import QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QFrame, QStackedWidget,
     QDialog, QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QApplication,
-    QSystemTrayIcon, QMenu,
+    QSystemTrayIcon, QMenu, QScrollArea,
 )
 
 from .theme import STYLESHEET, configure_fonts
-from .widgets import label, button, Job, SignalOrb, TextPreview, ApprovalBridge
+from .widgets import label, button, icon_button, Job, TextPreview, ApprovalBridge
+from .icons import icon
 from .pages import (
     HomePage, NotesPage, MemoryPage, TasksPage, FilesPage, AppsPage, SystemPage,
-    ActivityPage, VoicePage, AutomationsPage, SettingsPage,
+    ActivityPage, VoicePage, AutomationsPage, SettingsPage, ProjectsPage,
 )
 from .integrations import IntegrationsPage
 from .chat import ChatPage, PermissionDialog
@@ -28,11 +29,17 @@ from .overlay import CommandOverlay, GlobalHotkey, WorkflowHotkeys
 
 
 NAVIGATION = [
-    ("Home", "⌂"), ("Chat", "◈"), ("Voice", "≋"), ("Tasks", "✓"),
-    ("Memory", "◎"), ("Notes", "≡"), ("Files", "▱"), ("Apps", "⊞"),
-    ("Automations", "↻"), ("Integrations", "◇"), ("System", "⌁"),
-    ("Activity", "⋮"), ("Settings", "⚙"),
+    ("Home", "home"), ("Chat", "chat"), ("Voice", "voice"), ("Tasks", "tasks"),
+    ("Memory", "memory"), ("Notes", "notes"), ("Files", "files"), ("Apps", "apps"),
+    ("Automations", "automations"), ("Integrations", "integrations"), ("System", "system"),
+    ("Activity", "activity"), ("Settings", "settings"),
 ]
+SIDEBAR_GROUPS = (
+    ("CORE", ("Home", "Chat", "Operator")),
+    ("WORK", ("Missions", "Projects", "Tasks", "Notes", "Knowledge", "Memory")),
+    ("AUTOMATE", ("Automations", "Skills")),
+    ("SYSTEM", ("Files", "Apps", "Integrations", "System", "Voice")),
+)
 
 
 class RuntimeSignals(QObject):
@@ -52,10 +59,11 @@ class CommandPalette(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 18, 18, 18)
         layout.setSpacing(12)
-        layout.addWidget(label("COMMAND CENTER", "Eyebrow"))
+        layout.addWidget(label("Command palette", "Heading"))
         self.search = QLineEdit()
         self.search.setPlaceholderText("Search locally or describe what you want to do…")
-        self.search.setMinimumHeight(43)
+        self.search.setMinimumHeight(34)
+        self.search.setAccessibleName("Search commands and local resources")
         self.search.textChanged.connect(self.search_entries)
         self.search.returnPressed.connect(self.execute)
         layout.addWidget(self.search)
@@ -77,7 +85,7 @@ class CommandPalette(QDialog):
         entries = []
         window = self.window
         services = window.services
-        for name, _ in NAVIGATION:
+        for name in window.nav_buttons:
             entries.append(("Open " + name, "Navigate", lambda dest=name: window.navigate(dest)))
         entries.extend([
             ("New conversation", "Command", lambda: (window.navigate("Chat"), window.pages["Chat"].new_conversation())),
@@ -93,6 +101,21 @@ class CommandPalette(QDialog):
             ("Semantic search", "Search", window.open_adaptive),
             ("Local models and routing", "Settings", lambda: window.open_adaptive("Models")),
             ("Extension manager", "Settings", lambda: window.open_adaptive("Extensions")),
+            ("Missions", "Command", lambda: window.open_adaptive("Missions")),
+            ("Continue saved work", "Command", lambda: window.open_adaptive("Continue")),
+            ("Review latest checkpoint", "Command", lambda: window.open_capabilities("continuity.prepare")),
+            ("Personal context profiles", "Settings", lambda: window.open_adaptive("Personal context")),
+            ("Learned skills", "Command", lambda: window.open_adaptive("Skills")),
+            ("Daily brief", "Command", lambda: window.open_adaptive("Daily brief")),
+            ("Jarvix health", "Command", lambda: window.open_adaptive("Health")),
+            ("Execution evaluation", "Command", lambda: window.open_adaptive("Evaluation")),
+            ("Backup and restore", "Command", lambda: window.open_adaptive("Backups")),
+            ("Trusted devices", "Command", lambda: window.open_adaptive("Devices")),
+            ("Release updates", "Command", lambda: window.open_adaptive("Updates")),
+            ("Prepare project release", "Command", lambda: window.open_capabilities("intelligence.plan", {"recipe": "release_review"})),
+            ("Continue current project", "Project", lambda: window.open_capabilities("intelligence.prepare")),
+            ("Local suggestions", "Command", lambda: window.open_adaptive("Suggestions")),
+            ("Context graph", "Command", lambda: window.open_capabilities("context.graph")),
             ("Quick command overlay", "Command", window.open_overlay),
             ("Build a workflow", "Automation", window.open_workflow_builder),
             ("Manage workspaces", "Command", window.open_workspaces),
@@ -111,6 +134,14 @@ class CommandPalette(QDialog):
             entries.append((app["name"], "Application", lambda record=app: window.open_capabilities("apps.open", {"id": record["id"]})))
         for project in services.list_projects():
             entries.append((project["name"], "Project", lambda record=project: window.open_folder(record["path"])))
+            entries.append(("Continue " + project["name"], "Project",
+                            lambda record=project: window.open_capabilities("intelligence.prepare", {
+                                "project_id": record["id"], "goal": ("Continue " + record["name"])[:500]})))
+        missions = services.execute_tool("missions.list", {})
+        if missions.ok:
+            for mission in missions.data.get("items", []):
+                entries.append((mission["goal"], "Mission", lambda record=mission:
+                                window.open_capabilities("missions.summary", {"id": record["id"]})))
         for file in services.list_files():
             entries.append((file.get("name", file["path"]), "File", lambda record=file: TextPreview(record.get("name", "File"), "Indexed metadata; file contents remain unread.", json.dumps(record, indent=2, default=str), window).exec()))
         for task in services.list_tasks():
@@ -243,6 +274,13 @@ class CommandPalette(QDialog):
 
 
 class MainWindow(QMainWindow):
+    # Interface subclasses replace presentation only; all runtime ownership stays here.
+    interface_mode = "legacy"
+    interface_stylesheet = STYLESHEET
+    page_constructors = {}
+    operator_type = OperatorDialog
+    adaptive_type = None
+
     def __init__(self, services):
         super().__init__()
         configure_fonts()
@@ -255,6 +293,7 @@ class MainWindow(QMainWindow):
         self.reminder_dialogs = []
         self.capability_dialog = None
         self.operator_dialog = None
+        self.adaptive_dialog = None
         self.workflow_dialogs = []
         self.supervised_dialogs = []
         self.workspace_dialog = None
@@ -264,48 +303,58 @@ class MainWindow(QMainWindow):
         self.navigation_history = []
         self.navigation_position = -1
         self.current_page = "Home"
-        self.setWindowTitle("Jarvix · Personal AI workspace")
+        self.setWindowTitle("Jarvix")
         self.setWindowIcon(QIcon(str(Path(__file__).parent.parent / "assets" / "jarvix.svg")))
-        self.setMinimumSize(1080, 720)
-        self.resize(1440, 940)
-        self.setStyleSheet(STYLESHEET)
+        self.setMinimumSize(860, 600)
+        self.resize(1280, 840)
+        self.setStyleSheet(self.interface_stylesheet)
         root = QWidget()
         main = QHBoxLayout(root)
         main.setContentsMargins(0, 0, 0, 0)
         main.setSpacing(0)
         self.setCentralWidget(root)
-        sidebar = QFrame()
+        sidebar = self.sidebar = QFrame()
         sidebar.setObjectName("Sidebar")
-        sidebar.setFixedWidth(193)
+        sidebar.setFixedWidth(174)
         side = QVBoxLayout(sidebar)
-        side.setContentsMargins(14, 23, 14, 16)
+        side.setContentsMargins(8, 10, 8, 8)
         side.setSpacing(4)
         brand = QHBoxLayout()
         brand.setSpacing(5)
-        brand.addWidget(SignalOrb(36))
-        brand.addWidget(label("JARVIX", "Brand"))
+        self.brand_label = label("Jarvix", "Brand")
+        brand.addWidget(self.brand_label)
         brand.addStretch()
+        self.sidebar_toggle = icon_button("menu", "Collapse navigation", self.toggle_sidebar)
+        brand.addWidget(self.sidebar_toggle)
         side.addLayout(brand)
-        side.addWidget(label("     AI WORKSPACE", "Eyebrow"))
-        side.addSpacing(21)
+        nav_scroll = QScrollArea()
+        nav_scroll.setWidgetResizable(True)
+        nav_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        nav_scroll.setObjectName("SidebarScroll")
+        nav_content = QWidget()
+        nav_content.setObjectName("SidebarContent")
+        nav_layout = QVBoxLayout(nav_content)
+        nav_layout.setContentsMargins(0, 0, 0, 0)
+        nav_layout.setSpacing(2)
         self.nav_buttons = {}
-        for name, glyph in NAVIGATION:
-            if name in ("Tasks", "Automations", "Settings"):
-                side.addSpacing(9)
-            nav = button(glyph + "    " + name, lambda target=name: self.navigate(target), "Navigation")
-            nav.setCheckable(True)
-            nav.setMinimumHeight(34)
-            nav.setAccessibleName(name)
-            side.addWidget(nav)
-            self.nav_buttons[name] = nav
-        side.addStretch()
+        self.sidebar_labels = []
+        for group, names in SIDEBAR_GROUPS:
+            heading = label(group, "SidebarGroup")
+            heading.setContentsMargins(8, 12, 0, 4)
+            self.sidebar_labels.append(heading)
+            nav_layout.addWidget(heading)
+            for name in names:
+                nav_layout.addWidget(self.navigation_button(name))
+        nav_layout.addStretch()
+        nav_scroll.setWidget(nav_content)
+        side.addWidget(nav_scroll, 1)
         divider = QFrame()
         divider.setObjectName("Divider")
         side.addWidget(divider)
-        side.addSpacing(10)
-        side.addWidget(label("●  LOCAL-FIRST", "Success"))
-        side.addWidget(label("Your data. Your decisions.", "Muted"))
-        side.addWidget(label("ADAPTIVE  /  0.6", "Eyebrow"))
+        for name in ("Activity", "Settings"):
+            side.addWidget(self.navigation_button(name))
+        self.sidebar_collapsed = False
+        self.toggle_sidebar(self.services.settings.get("ui.sidebar_collapsed", False), persist=False)
         main.addWidget(sidebar)
         workspace = QWidget()
         workspace_layout = QVBoxLayout(workspace)
@@ -313,26 +362,23 @@ class MainWindow(QMainWindow):
         workspace_layout.setSpacing(0)
         topbar = QFrame()
         topbar.setObjectName("Topbar")
-        topbar.setFixedHeight(59)
+        topbar.setFixedHeight(48)
         top = QHBoxLayout(topbar)
-        top.setContentsMargins(30, 0, 26, 0)
-        self.back_button = button("‹", lambda: self.go_history(-1), "Quiet")
-        self.back_button.setToolTip("Back · Alt+Left")
-        self.forward_button = button("›", lambda: self.go_history(1), "Quiet")
-        self.forward_button.setToolTip("Forward · Alt+Right")
+        top.setContentsMargins(12, 0, 12, 0)
+        top.setSpacing(4)
+        self.back_button = icon_button("chevron-left", "Back · Alt+Left", lambda: self.go_history(-1))
+        self.forward_button = icon_button("chevron-right", "Forward · Alt+Right", lambda: self.go_history(1))
         top.addWidget(self.back_button)
         top.addWidget(self.forward_button)
-        self.breadcrumb = label("WORKSPACE  /  HOME", "Eyebrow")
+        self.breadcrumb = label("Home", "Muted")
         top.addWidget(self.breadcrumb)
         top.addStretch()
         self.clock_label = label("", "Muted")
         top.addWidget(self.clock_label)
-        top.addSpacing(19)
-        top.addWidget(button("Actions", self.open_capabilities))
-        top.addWidget(button("Operator", self.open_operator))
-        top.addWidget(button("Knowledge", self.open_adaptive, "Quiet"))
-        top.addWidget(button("Inbox", self.open_notifications, "Quiet"))
-        top.addWidget(button("Search anything    Ctrl K", self.open_palette))
+        top.addSpacing(8)
+        top.addWidget(button("Tools", self.open_capabilities, "Quiet"))
+        top.addWidget(button("Notifications", self.open_notifications, "Quiet"))
+        top.addWidget(button("Search · Ctrl+K", self.open_palette))
         workspace_layout.addWidget(topbar)
         self.stack = QStackedWidget()
         workspace_layout.addWidget(self.stack, 1)
@@ -343,17 +389,15 @@ class MainWindow(QMainWindow):
             "Automations": AutomationsPage, "Integrations": IntegrationsPage, "System": SystemPage,
             "Activity": ActivityPage, "Settings": SettingsPage,
         }
+        constructors.update(self.page_constructors)
         self.pages = {}
         for name, _ in NAVIGATION:
             page = constructors[name](self)
             self.pages[name] = page
             self.stack.addWidget(page)
+        self.pages["Projects"] = constructors.get("Projects", ProjectsPage)(self)
+        self.stack.addWidget(self.pages["Projects"])
         status = self.statusBar()
-        status.setStyleSheet(
-            "QStatusBar { background: rgba(7, 12, 20, 245); "
-            "border-top: 1px solid rgba(174, 212, 255, 32); "
-            "color: #8299b4; padding: 4px 12px; font-size: 11px; }"
-        )
         status.setSizeGripEnabled(False)
         self.provider_label = label("", "Muted")
         status.addPermanentWidget(self.provider_label)
@@ -406,7 +450,7 @@ class MainWindow(QMainWindow):
         if isinstance(geometry, str) and len(geometry) < 4096:
             self.restoreGeometry(QByteArray.fromBase64(geometry.encode("ascii", errors="ignore")))
         last_page = self.services.settings.get("ui.last_page", "Home")
-        self.navigate(last_page if last_page in self.pages else "Home")
+        self.navigate(last_page if last_page in self.nav_buttons else "Home")
         self.setup_tray()
         self.configure_overlay()
         self.configure_workflow_hotkeys()
@@ -416,6 +460,32 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(100, self.refresh_system)
         if not hasattr(self.services, "background"):
             QTimer.singleShot(700, self.run_routines)
+
+    def navigation_button(self, name):
+        nav = button(name, lambda target=name: self.navigate(target), "Navigation")
+        nav.setIcon(icon(name.lower()))
+        nav.setIconSize(QSize(18, 18))
+        nav.setCheckable(True)
+        nav.setMinimumHeight(28)
+        self.nav_buttons[name] = nav
+        return nav
+
+    def toggle_sidebar(self, collapsed=None, *, persist=True):
+        # Qt's clicked(bool) is not a requested collapse state.
+        if collapsed is None or self.sender() is self.sidebar_toggle:
+            collapsed = not self.sidebar_collapsed
+        self.sidebar_collapsed = bool(collapsed)
+        self.sidebar.setFixedWidth(52 if collapsed else 174)
+        self.brand_label.setVisible(not collapsed)
+        for heading in self.sidebar_labels:
+            heading.setVisible(not collapsed)
+        for name, nav in self.nav_buttons.items():
+            nav.setText("" if collapsed else name)
+        description = "Expand navigation" if collapsed else "Collapse navigation"
+        self.sidebar_toggle.setAccessibleName(description)
+        self.sidebar_toggle.setToolTip(description)
+        if persist:
+            self.services.settings.set("ui.sidebar_collapsed", self.sidebar_collapsed)
 
     def update_clock(self):
         self.clock_label.setText(datetime.now().strftime("%a, %b %d   %I:%M %p"))
@@ -467,17 +537,54 @@ class MainWindow(QMainWindow):
         self.provider_label.setText(f"{names.get(provider, provider)} · {'Configured' if configured else 'Setup required'}")
 
     def open_adaptive(self, tab="Search"):
-        from .adaptive import AdaptiveDialog
-        AdaptiveDialog(self, tab).exec()
+        if self.closing:
+            return
+        destination = tab if tab in ("Missions", "Skills") else "Knowledge"
+        self.navigate(destination)
+        if self.current_page != destination:
+            return
+        dialog = self.adaptive_dialog
+        index = next((i for i in range(dialog.tabs.count()) if dialog.tabs.tabText(i) == tab), 0)
+        dialog.tabs.setCurrentIndex(index)
+        self.breadcrumb.setText(destination if tab == destination else f"{destination} / {tab}")
+
+    def ensure_page(self, name):
+        if name == "Operator" and self.operator_dialog is None:
+            self.operator_dialog = self.operator_type(self)
+            self.operator_dialog.setWindowFlags(Qt.WindowType.Widget)
+            self.operator_dialog.installEventFilter(self)
+            self.stack.addWidget(self.operator_dialog)
+            self.pages[name] = self.operator_dialog
+        elif name in ("Missions", "Knowledge", "Skills") and self.adaptive_dialog is None:
+            from .adaptive import AdaptiveDialog
+            self.adaptive_dialog = (self.adaptive_type or AdaptiveDialog)(self, name)
+            self.adaptive_dialog.setWindowFlags(Qt.WindowType.Widget)
+            self.adaptive_dialog.installEventFilter(self)
+            self.stack.addWidget(self.adaptive_dialog)
+            for destination in ("Missions", "Knowledge", "Skills"):
+                self.pages[destination] = self.adaptive_dialog
+
+    def eventFilter(self, watched, event):
+        if (watched in (self.operator_dialog, self.adaptive_dialog)
+                and event.type() == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Escape):
+            # Embedded workspaces are pages; Escape still denies real dialogs.
+            event.accept()
+            return True
+        return super().eventFilter(watched, event)
 
     def navigate(self, name, record_history=True):
         if self.closing:
             return
-        if name not in self.pages:
+        if name not in self.nav_buttons:
             raise ValueError(f"Unknown Jarvix section: {name}")
         if self.current_page == "Notes" and name != "Notes":
             if not self.guard(self.pages["Notes"].preserve):
                 return
+        self.ensure_page(name)
+        if name in ("Missions", "Knowledge", "Skills"):
+            tabs = self.adaptive_dialog.tabs
+            index = next(i for i in range(tabs.count()) if tabs.tabText(i) == name)
+            tabs.setCurrentIndex(index)
         self.current_page = name
         self.services.settings.set("ui.last_page", name)
         if record_history and (self.navigation_position < 0 or self.navigation_history[self.navigation_position] != name):
@@ -487,9 +594,10 @@ class MainWindow(QMainWindow):
         self.back_button.setEnabled(self.navigation_position > 0)
         self.forward_button.setEnabled(self.navigation_position < len(self.navigation_history) - 1)
         self.stack.setCurrentWidget(self.pages[name])
+        self.pages[name].show()
         for key, nav in self.nav_buttons.items():
             nav.setChecked(key == name)
-        self.breadcrumb.setText("WORKSPACE  /  " + name.upper())
+        self.breadcrumb.setText(name)
         self.guard(self.pages[name].refresh)
 
     def go_history(self, offset):
@@ -558,13 +666,11 @@ class MainWindow(QMainWindow):
     def open_operator(self, session_id=None):
         if self.closing:
             return
-        if self.operator_dialog is None:
-            self.operator_dialog = OperatorDialog(self)
+        self.navigate("Operator")
+        if self.current_page != "Operator":
+            return
         if session_id:
             self.operator_dialog.open_session(session_id)
-        self.operator_dialog.show()
-        self.operator_dialog.raise_()
-        self.operator_dialog.activateWindow()
 
     def open_workflow_builder(self, definition=None):
         from .workflows import WorkflowBuilder
@@ -798,6 +904,8 @@ class MainWindow(QMainWindow):
             self.services.background.stop(timeout=0)
         if self.operator_dialog:
             self.operator_dialog.shutdown()
+        if self.adaptive_dialog:
+            self.adaptive_dialog._closed = True
         for dialog in list(self.workflow_dialogs):
             dialog.cancel()
             dialog.hide()

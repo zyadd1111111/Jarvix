@@ -3,6 +3,7 @@ from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QCheckBox, QDoubleSpinBox, QFileDialog, QHBoxLayout, QLineEdit, QVBoxLayout, QWidget
 
 from .widgets import button, label
+from .icons import icon
 
 
 class WakeWordPanel(QWidget):
@@ -14,13 +15,23 @@ class WakeWordPanel(QWidget):
         self.wake = self.services.wake_word
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 12, 0, 0)
+        layout.setSpacing(8)
         layout.addWidget(label("Local wake word · Jarvix", "Heading"))
-        layout.addWidget(label(
-            "Off at each launch. Install the optional voice extra and a compatible sherpa-onnx keyword model. "
+        layout.addWidget(label("Off at each launch. Uses your installed local keyword model; no audio is uploaded.", "Muted", True))
+        requirements = label(
+            "Install the optional voice extra and a compatible sherpa-onnx keyword model. "
             "Choose a folder with encoder/decoder/joiner ONNX, tokens.txt and tokenized keywords.txt labelled "
-            "@jarvix, @stop, @cancel and @never_mind. No model is downloaded and no audio is uploaded.", "Muted", True))
+            "@jarvix, @stop, @cancel and @never_mind. Jarvix does not download a model automatically.", "Muted", True)
+        requirements.hide()
+        setup = button("Model requirements", style="Quiet")
+        setup.setIcon(icon("chevron-right"))
+        setup.setCheckable(True)
+        setup.toggled.connect(requirements.setVisible)
+        layout.addWidget(setup)
+        layout.addWidget(requirements)
         row = QHBoxLayout()
         self.directory = QLineEdit(self.services.settings.get("wake.model_directory", ""))
+        self.directory.setAccessibleName("Local wake-word model folder")
         self.directory.setPlaceholderText("Installed local keyword model folder")
         row.addWidget(self.directory, 1)
         row.addWidget(button("Choose model", self.choose_model))
@@ -31,6 +42,7 @@ class WakeWordPanel(QWidget):
         self.sensitivity.setRange(.05, .95)
         self.sensitivity.setSingleStep(.05)
         self.sensitivity.setValue(float(self.services.settings.get("wake.sensitivity", .75)))
+        self.sensitivity.setAccessibleName("Wake-word sensitivity")
         self.sensitivity.setToolTip("Higher sensitivity detects more easily and may cause false wakes.")
         row.addWidget(self.sensitivity)
         self.enable = button("Enable for this session", self.start, "Primary")
@@ -42,6 +54,7 @@ class WakeWordPanel(QWidget):
         self.hands_free.toggled.connect(self.wake.set_hands_free)
         layout.addWidget(self.hands_free)
         self.status = label("Wake word off", "Muted", True)
+        self.status.setAccessibleName("Wake-word microphone activity")
         layout.addWidget(self.status)
         self.timer = QTimer(self)
         self.timer.setInterval(150)
@@ -74,7 +87,7 @@ class WakeWordPanel(QWidget):
         if self.window.closing:
             return
         state = self.wake.state()
-        self.status.setText(("● MICROPHONE ACTIVE · " if state["active"] else "") + state["status"])
+        self.status.setText(("MICROPHONE ACTIVE · " if state["active"] else "") + state["status"])
         self.enable.setEnabled(not state["busy"])
         self.directory.setEnabled(not state["busy"])
         self.sensitivity.setEnabled(not state["busy"])

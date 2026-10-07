@@ -16,6 +16,7 @@ class BackgroundRuntime:
         self._tick_lock = threading.Lock()
         self._thread = None
         self._last_error = False
+        self._suggestions = ()
 
     @property
     def running(self):
@@ -101,6 +102,12 @@ class BackgroundRuntime:
                     self._emit("notification", notification)
                 if legacy:
                     self._emit("automations", {"completed": legacy})
+                if hasattr(self.s, "proactive"):
+                    suggestions = self.s.proactive.refresh()
+                    identities = tuple(item["id"] for item in suggestions)
+                    if identities != self._suggestions:
+                        self._suggestions = identities
+                        self._emit("suggestions", {"count": len(identities)})
                 return {"workflows": workflows, "reminders": reminders}
         finally:
             self._tick_lock.release()

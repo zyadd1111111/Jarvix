@@ -13,6 +13,7 @@ from jarvix.domain import PermissionRequest
 
 from .chat import PermissionDialog
 from .widgets import TextPreview, button, label
+from .icons import icon
 
 
 HOTKEYS = {"Alt+Space": (0x0001, 0x20), "Ctrl+Alt+Space": (0x0003, 0x20),
@@ -106,23 +107,29 @@ class CommandOverlay(QDialog):
         self.window = window
         self.setWindowTitle("Jarvix quick command")
         self.setObjectName("CommandOverlay")
-        self.setFixedWidth(720)
+        self.resize(660, 220)
+        self.setMinimumWidth(440)
+        self.setMaximumWidth(800)
         self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(8)
         row = QHBoxLayout()
-        row.addWidget(label("JARVIX", "Brand"))
+        row.addWidget(label("Jarvix command", "Heading"))
         row.addStretch()
-        row.addWidget(button("Esc", self.hide, "Quiet"))
+        dismiss = button("Dismiss · Esc", self.hide, "Quiet")
+        dismiss.setIcon(icon("x"))
+        row.addWidget(dismiss)
         layout.addLayout(row)
         row = QHBoxLayout()
         self.command = QLineEdit()
         self.command.setPlaceholderText("Ask Jarvix or tell it to do something…")
-        self.command.setMinimumHeight(48)
+        self.command.setMinimumHeight(38)
+        self.command.setAccessibleName("Quick command")
         self.command.returnPressed.connect(self.submit)
         row.addWidget(self.command, 1)
         row.addWidget(button("Voice", self.voice))
-        row.addWidget(button("↑", self.submit, "Primary"))
+        row.addWidget(button("Send to Chat", self.submit, "Primary"))
         layout.addLayout(row)
         self.context = label("Current application context is off.", "Muted", True)
         layout.addWidget(self.context)
@@ -134,7 +141,7 @@ class CommandOverlay(QDialog):
         self.inspect_button.setEnabled(False)
         context_row.addWidget(self.inspect_button)
         layout.addLayout(context_row)
-        layout.addWidget(label("Commands open a visible session. Screen access happens only on request.", "Muted"))
+        layout.addWidget(label("Screen capture and actions use the usual permissions.", "Caption"))
         self.context_generation = 0
         self.pending_context = False
         self.context_snapshot = None

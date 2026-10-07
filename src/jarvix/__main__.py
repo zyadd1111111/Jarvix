@@ -23,12 +23,12 @@ def main() -> int:
     from PySide6.QtGui import QFont
     from PySide6.QtWidgets import QApplication, QMessageBox
     from jarvix.services import Services
-    from jarvix.ui import MainWindow
+    from jarvix.ui.interface import create_window
 
     app = QApplication(sys.argv[:1])
     app.setApplicationName("Jarvix")
     app.setOrganizationName("Jarvix")
-    app.setFont(QFont("Segoe UI", 10))
+    app.setFont(QFont("Segoe UI Variable", 10))
     from platformdirs import user_data_path
     data_dir = Path(args.data_dir or os.environ.get("JARVIX_DATA_DIR") or user_data_path("Jarvix", appauthor=False))
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -45,7 +45,7 @@ def main() -> int:
             QMessageBox.critical(None, "Jarvix profile needs attention",
                 "This profile could not be opened. Its data has been preserved. Check the profile permissions, Windows account and local backup before trying again.")
         return 2
-    window = MainWindow(services)
+    window = create_window(services)
     if args.screenshot:
         window.resize(1440, 940)
     if args.page:

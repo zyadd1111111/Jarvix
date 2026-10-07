@@ -1,226 +1,144 @@
-"""Liquid Glass OS visual language for the native Jarvix UI.
-
-This module is intentionally presentation-only. The stylesheet targets the object
-names already used by the desktop shell and pages, so application contracts and
-service boundaries remain unchanged.
-"""
-
+"""Shared technical desktop tokens; dark today, light palette prepared for later."""
 import os
 from pathlib import Path
 
 from PySide6.QtGui import QFontDatabase, QGuiApplication
 
+DARK = {
+    "background": "#191b1f", "surface": "#202328", "raised": "#292d33",
+    "border": "#383d44", "muted": "#a5abb4", "text": "#e7e9ed",
+    "accent": "#5db6a6", "selected": "#343a42", "warning": "#d6ad64",
+    "error": "#e48989", "success": "#81be99", "disabled": "#747b85", "on_accent": "#142421",
+}
+LIGHT = {
+    "background": "#f5f5f4", "surface": "#ffffff", "raised": "#eeefef",
+    "border": "#c8ccd0", "muted": "#555d67", "text": "#22272e",
+    "accent": "#167565", "selected": "#dce1e5", "warning": "#936517",
+    "error": "#b32935", "success": "#287943", "disabled": "#838990", "on_accent": "#ffffff",
+}
+COLORS = DARK
+MONO_FONT = "Cascadia Mono"
+TOKENS = {"spacing": (4, 8, 12, 16, 24), "radius": 5, "font_size": 10,
+          "control_height": 24, "animation_ms": 140}
+
 
 def configure_fonts():
-    """Make the Windows geometric sans available to Qt's offscreen backend."""
     if os.name != "nt" or QGuiApplication.platformName() not in ("offscreen", "minimal"):
         return
-    families = QFontDatabase.families()
-    if "Segoe UI" in families or "Segoe UI Variable" in families:
-        return
     fonts = Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts"
-    for filename in ("segoeui.ttf", "seguisb.ttf", "segoeuib.ttf", "seguisym.ttf"):
+    for filename in ("SegUIVar.ttf", "segoeui.ttf", "seguisb.ttf", "segoeuib.ttf", "CascadiaMono.ttf", "consola.ttf"):
         path = fonts / filename
         if path.is_file():
             QFontDatabase.addApplicationFont(str(path))
 
 
-# Qt stylesheets do not expose browser-style backdrop-filter. Layered,
-# translucent gradients, refractive borders and soft shadows provide the same
-# depth while remaining native, reliable and inexpensive on Windows.
-STYLESHEET = r"""
-* { outline: none; }
-QWidget {
-    background: #080b12;
-    color: #e7edf8;
-    font-family: 'Segoe UI Variable', 'Segoe UI';
-    font-size: 13px;
-}
-QMainWindow, QDialog {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-        stop:0 #070a10, stop:.55 #0a0f18, stop:1 #080b13);
-}
-QDialog#ControlHud, QDialog#CommandOverlay {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-        stop:0 rgba(21, 30, 49, 250), stop:.55 rgba(12, 19, 34, 248), stop:1 rgba(8, 13, 24, 252));
-    border: 1px solid rgba(142, 212, 255, 115);
-    border-radius: 18px;
-}
+def stylesheet(mode="dark"):
+    palette = LIGHT if mode == "light" else DARK
+    style = r"""
+QWidget { background: @background; color: @text; font-family: 'Segoe UI Variable', 'Segoe UI'; font-size: 10pt; }
+QMainWindow, QDialog { background: @background; }
 QLabel { background: transparent; }
-QLabel#Brand {
-    font-size: 18px;
-    font-weight: 700;
-    letter-spacing: 5px;
-    color: #f7fbff;
-}
-QLabel#Eyebrow {
-    font-size: 10px;
-    font-weight: 700;
-    color: #8394b4;
-    letter-spacing: 2px;
-}
-QLabel#Title {
-    font-size: 28px;
-    font-weight: 600;
-    color: #f5f8ff;
-}
-QLabel#Subtitle { font-size: 12px; color: #8797b0; }
-QLabel#Heading { font-size: 15px; font-weight: 600; color: #eaf3ff; }
-QLabel#Metric { font-size: 30px; font-weight: 500; color: #dff5ff; }
-QLabel#Muted { color: #8b9ab2; }
-QLabel#Accent { color: #7fe6ff; }
-QLabel#Success { color: #83d5b5; }
-
-QFrame#Sidebar {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-        stop:0 #080b12, stop:.7 #0b101a, stop:1 #0e1522);
-    border-right: 1px solid rgba(174, 212, 255, 32);
-}
-QFrame#Topbar {
-    background: rgba(8, 12, 20, 235);
-    border-bottom: 1px solid rgba(174, 212, 255, 32);
-}
-QFrame#Panel {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-        stop:0 rgba(21, 31, 47, 235), stop:.48 rgba(16, 24, 38, 222), stop:1 rgba(10, 16, 27, 238));
-    border: 1px solid rgba(190, 224, 255, 35);
-    border-top-color: rgba(225, 244, 255, 72);
-    border-radius: 16px;
-}
-QFrame#Panel:hover {
-    border-color: rgba(111, 224, 255, 82);
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-        stop:0 rgba(26, 39, 60, 242), stop:.48 rgba(17, 29, 46, 230), stop:1 rgba(11, 18, 31, 242));
-}
-QFrame#Hero {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-        stop:0 rgba(21, 49, 72, 238), stop:.42 rgba(18, 35, 57, 232), stop:1 rgba(29, 25, 59, 238));
-    border: 1px solid rgba(134, 225, 255, 105);
-    border-top-color: rgba(234, 252, 255, 145);
-    border-radius: 20px;
-}
-QFrame#Divider { background: rgba(164, 208, 245, 42); max-height: 1px; min-height: 1px; }
-QFrame#Message, QFrame#UserMessage {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-        stop:0 rgba(18, 30, 45, 240), stop:1 rgba(12, 19, 31, 228));
-    border: 1px solid rgba(184, 219, 255, 30);
-    border-left: 2px solid #59dfff;
-    border-radius: 14px;
-}
-QFrame#UserMessage {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-        stop:0 rgba(35, 29, 62, 238), stop:1 rgba(19, 22, 43, 228));
-    border-left-color: #a990ff;
-}
-
-QPushButton {
-    background: rgba(28, 41, 62, 215);
-    border: 1px solid rgba(187, 222, 255, 48);
-    border-top-color: rgba(232, 248, 255, 88);
-    border-radius: 9px;
-    padding: 8px 14px;
-    color: #dfecfb;
-}
-QPushButton:hover {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-        stop:0 rgba(51, 82, 112, 230), stop:1 rgba(37, 51, 88, 230));
-    border-color: rgba(116, 229, 255, 130);
-    color: #f5fcff;
-}
-QPushButton:pressed { background: rgba(53, 84, 123, 245); }
-QPushButton:disabled { color: #5d6a80; background: rgba(15, 22, 34, 180); border-color: rgba(137, 164, 196, 20); }
-QPushButton#Primary {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-        stop:0 #3f9fc2, stop:.52 #4978c5, stop:1 #7654b8);
-    color: #ffffff;
-    border: 1px solid rgba(206, 249, 255, 150);
-    font-weight: 600;
-}
-QPushButton#Primary:hover { background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #58c7e4, stop:.5 #608fe3, stop:1 #946bd4); }
-QPushButton#Danger { color: #ffc1ca; background: rgba(69, 27, 42, 200); border-color: rgba(255, 123, 145, 76); }
-QPushButton#Quiet { background: transparent; border-color: transparent; color: #97a9c3; }
-QPushButton#Quiet:hover { background: rgba(117, 197, 239, 24); color: #effaff; border-color: rgba(116, 229, 255, 55); }
-QPushButton#Navigation {
-    text-align: left;
-    background: transparent;
-    border: 1px solid transparent;
-    border-radius: 10px;
-    padding: 10px 12px;
-    color: #8f9db4;
-}
-QPushButton#Navigation:hover { background: rgba(106, 188, 227, 18); color: #dff7ff; }
-QPushButton#Navigation:checked {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-        stop:0 rgba(74, 184, 223, 50), stop:1 rgba(112, 95, 214, 42));
-    color: #c8f5ff;
-    border-color: rgba(119, 222, 255, 75);
-}
-
-QLineEdit, QTextEdit, QPlainTextEdit, QSpinBox {
-    background: rgba(5, 11, 20, 190);
-    border: 1px solid rgba(170, 211, 247, 54);
-    border-top-color: rgba(220, 243, 255, 74);
-    border-radius: 10px;
-    padding: 9px 11px;
-    color: #e8f3ff;
-    selection-background-color: #2e789b;
-}
-QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus, QSpinBox:focus { border-color: #62d8f5; background: rgba(9, 19, 32, 230); }
-QLineEdit::placeholder { color: #667993; }
-QComboBox {
-    background: rgba(18, 31, 48, 225);
-    border: 1px solid rgba(180, 220, 255, 50);
-    border-radius: 9px;
-    padding: 8px 11px;
-    min-width: 95px;
-}
-QComboBox::drop-down { border: none; width: 24px; }
-QComboBox QAbstractItemView { background: #121f31; border: 1px solid #456381; selection-background-color: #285273; }
-QListWidget {
-    background: rgba(8, 15, 26, 205);
-    border: 1px solid rgba(170, 211, 247, 48);
-    border-radius: 11px;
-    padding: 5px;
-    outline: 0;
-}
-QListWidget::item { padding: 10px 9px; border-bottom: 1px solid rgba(176, 215, 248, 22); }
-QListWidget::item:selected { background: rgba(75, 148, 193, 74); color: #e3f8ff; border-radius: 7px; }
-QListWidget::item:hover { background: rgba(91, 190, 231, 30); }
-QTableWidget {
-    background: rgba(8, 15, 26, 205);
-    alternate-background-color: rgba(18, 30, 47, 190);
-    border: 1px solid rgba(170, 211, 247, 48);
-    border-radius: 11px;
-    gridline-color: rgba(160, 205, 243, 25);
-    selection-background-color: rgba(67, 142, 190, 92);
-}
-QTableWidget::item { padding: 9px; }
-QHeaderView::section {
-    background: rgba(23, 39, 59, 230);
-    border: none;
-    border-bottom: 1px solid rgba(187, 226, 255, 55);
-    padding: 9px;
-    color: #91a8c3;
-    font-size: 10px;
-    font-weight: 700;
-}
+QLabel#Brand { font-size: 12pt; font-weight: 600; }
+QLabel#Title { font-size: 16pt; font-weight: 600; }
+QLabel#Heading, QLabel#SectionHeader { font-size: 10.5pt; font-weight: 600; }
+QLabel#MessageAuthor, QLabel#SectionTitle { font-size: 10pt; font-weight: 600; }
+QLabel#Eyebrow, QLabel#SidebarGroup { font-size: 8pt; color: @muted; }
+QLabel#Subtitle, QLabel#Muted, QLabel#Caption { color: @muted; font-size: 9pt; }
+QLabel#Metric { font-size: 14pt; font-weight: 600; }
+QLabel#Accent { color: @accent; }
+QLabel#Success { color: @success; }
+QLabel#Warning { color: @warning; }
+QLabel#Error { color: @error; }
+QLabel#Code, QPlainTextEdit, QTextEdit#Code, QTextBrowser { font-family: 'Cascadia Mono', 'Consolas', monospace; }
+QPlainTextEdit#Composer { font-family: 'Segoe UI Variable', 'Segoe UI'; }
+QTextBrowser#MessageText { background: transparent; border: none; padding: 0; font-family: 'Segoe UI Variable', 'Segoe UI'; }
+QWidget#ToolRow { background: @surface; border: 1px solid @border; border-radius: 4px; }
+QFrame#Sidebar { background: @surface; border-right: 1px solid @border; }
+QWidget#SidebarContent, QScrollArea#SidebarScroll { background: @surface; border: none; }
+QFrame#Topbar { border-bottom: 1px solid @border; background: @background; }
+QFrame#Panel, QFrame#InspectorPanel { background: @surface; border: 1px solid @border; border-radius: 6px; }
+QFrame#Section, QFrame#Message, QFrame#ToolRow { background: transparent; border: none; border-bottom: 1px solid @border; }
+QFrame#UserMessage { background: @surface; border: none; border-left: 2px solid @border; }
+QFrame#Divider { background: @border; border: none; max-height: 1px; }
+QListWidget#ToolTimeline::item { padding: 0; }
+QListWidget#ToolTimeline { border: none; background: transparent; }
+QFrame#CommandBar { background: @surface; border: 1px solid @border; border-radius: 6px; }
+QDialog#ControlHud, QDialog#CommandOverlay { background: @raised; border: 1px solid @border; border-radius: 8px; }
+QPushButton, QToolButton { background: @raised; color: @text; border: 1px solid @border; border-radius: 4px; padding: 4px 10px; min-height: @control_height; }
+QPushButton:hover, QToolButton:hover { background: @selected; border-color: @muted; }
+QPushButton:pressed, QToolButton:pressed { background: @surface; }
+QPushButton:focus, QToolButton:focus { border: 1px solid @accent; }
+QPushButton:disabled, QToolButton:disabled { color: @disabled; border-color: @border; background: @surface; }
+QPushButton#Primary { background: @accent; color: @on_accent; border-color: @accent; font-weight: 600; }
+QPushButton#Primary:hover { background: @success; border-color: @success; }
+QPushButton#Primary:pressed { background: @accent; border-color: @text; }
+QPushButton#Primary:disabled { background: @raised; color: @disabled; border-color: @border; }
+QPushButton#Danger { color: @error; }
+QPushButton#Danger:hover { border-color: @error; }
+QPushButton#Quiet { background: transparent; border-color: transparent; }
+QPushButton#Quiet:hover { background: @raised; border-color: @border; }
+QPushButton#Quiet:focus { border-color: @accent; }
+QPushButton#Navigation { text-align: left; padding: 3px 8px; border: 1px solid transparent; border-radius: 4px; background: transparent; color: @muted; }
+QPushButton#Navigation:hover { color: @text; background: @raised; }
+QPushButton#Navigation:checked { color: @text; background: @selected; border-color: @border; }
+QPushButton#Navigation:focus { border-color: @accent; }
+QLineEdit, QTextEdit, QPlainTextEdit, QSpinBox, QDoubleSpinBox { background: @surface; border: 1px solid @border; border-radius: 4px; padding: 5px 8px; selection-background-color: @selected; color: @text; }
+QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus { border-color: @accent; }
+QLineEdit:disabled, QPlainTextEdit:disabled, QSpinBox:disabled { color: @disabled; }
+QComboBox { background: @surface; border: 1px solid @border; border-radius: 4px; padding: 5px 8px; min-height: @control_height; }
+QComboBox:focus { border-color: @accent; }
+QComboBox::drop-down { border: none; width: 22px; }
+QComboBox QAbstractItemView { background: @raised; border: 1px solid @border; selection-background-color: @selected; }
+QListWidget, QTreeWidget, QTableWidget { background: @surface; alternate-background-color: @background; border: 1px solid @border; border-radius: 4px; outline: none; selection-background-color: @selected; selection-color: @text; }
+QListWidget::item { padding: 6px 8px; border-bottom: 1px solid @border; }
+QListWidget::item:selected, QTreeWidget::item:selected { background: @selected; color: @text; }
+QListWidget::item:hover { background: @raised; }
+QTableWidget::item { padding: 4px 8px; border-bottom: 1px solid @border; }
+QTableWidget::item:focus { border: 1px solid @accent; }
+QHeaderView::section { background: @raised; color: @muted; padding: 6px 8px; border: none; border-bottom: 1px solid @border; font-weight: 400; }
 QScrollArea { border: none; background: transparent; }
-QScrollBar:vertical { background: transparent; width: 9px; margin: 3px; }
-QScrollBar::handle:vertical { background: rgba(106, 157, 195, 105); border-radius: 4px; min-height: 36px; }
-QScrollBar::handle:vertical:hover { background: rgba(115, 222, 255, 150); }
+QScrollBar:vertical { background: @background; width: 10px; margin: 0; }
+QScrollBar::handle:vertical { background: @border; border-radius: 3px; min-height: 24px; }
+QScrollBar::handle:vertical:hover { background: @muted; }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
 QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
-QScrollBar:horizontal { height: 9px; background: transparent; }
-QScrollBar::handle:horizontal { background: rgba(106, 157, 195, 105); border-radius: 4px; }
-QProgressBar { border: none; background: rgba(63, 91, 121, 100); border-radius: 4px; height: 6px; text-align: center; }
-QProgressBar::chunk { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #56d5ed, stop:1 #9b7cf2); border-radius: 4px; }
-QCheckBox { spacing: 8px; background: transparent; }
-QCheckBox::indicator { width: 15px; height: 15px; border: 1px solid #51708d; background: rgba(10, 18, 29, 210); border-radius: 5px; }
-QCheckBox::indicator:checked { background: #55b9da; border-color: #b2f4ff; }
-QSplitter::handle { background: transparent; width: 12px; }
-QToolTip { background: #172b40; color: #edfbff; border: 1px solid #4c779a; padding: 7px; border-radius: 6px; }
-QMenu { background: #101c2d; border: 1px solid #416180; padding: 5px; border-radius: 8px; }
-QMenu::item { padding: 8px 22px; }
-QMenu::item:selected { background: rgba(76, 162, 207, 95); }
-QStatusBar { background: rgba(7, 12, 20, 245); border-top: 1px solid rgba(174, 212, 255, 32); color: #8299b4; padding: 4px 12px; font-size: 11px; }
+QScrollBar:horizontal { height: 10px; background: @background; }
+QScrollBar::handle:horizontal { background: @border; border-radius: 3px; min-width: 24px; }
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
+QProgressBar { border: none; background: @border; border-radius: 2px; min-height: 5px; max-height: 16px; text-align: center; }
+QProgressBar::chunk { background: @accent; border-radius: 2px; }
+QCheckBox { spacing: 7px; background: transparent; }
+QCheckBox::indicator { width: 15px; height: 15px; border: 1px solid @muted; background: @surface; border-radius: 3px; }
+QCheckBox::indicator:checked { background: @accent; border-color: @accent; image: url(@check_icon); }
+QCheckBox:focus { color: @accent; }
+QSplitter::handle { background: @background; width: 6px; height: 6px; }
+QSplitter::handle:hover { background: @border; }
+QTabWidget::pane { border: 1px solid @border; }
+QTabBar::tab { background: @background; color: @muted; padding: 6px 12px; border-bottom: 2px solid transparent; }
+QTabBar::tab:selected { color: @text; border-bottom-color: @accent; }
+QTabBar::tab:focus { border-color: @accent; }
+QToolTip { background: @raised; color: @text; border: 1px solid @border; padding: 6px; }
+QMenu { background: @raised; color: @text; border: 1px solid @border; padding: 4px; }
+QMenu::item { padding: 6px 22px; }
+QMenu::item:selected { background: @selected; }
+QMenu::separator { height: 1px; background: @border; margin: 4px 6px; }
+QStatusBar { background: @surface; color: @muted; border-top: 1px solid @border; padding: 2px 8px; font-size: 9pt; }
+QGroupBox { border: 1px solid @border; border-radius: 6px; margin-top: 12px; padding-top: 10px; }
+QGroupBox::title { subcontrol-origin: margin; padding: 0 6px; }
 """
+    values = {**palette, "control_height": f"{TOKENS['control_height']}px",
+              "check_icon": (Path(__file__).parent.parent / "assets" / "icons" / "check.svg").as_posix()}
+    for key, value in values.items():
+        style = style.replace("@" + key, value)
+    return style
+
+
+def markdown_stylesheet():
+    return ("body { font-family: 'Segoe UI Variable', 'Segoe UI'; } "
+            f"pre, code {{ font-family: '{MONO_FONT}', 'Consolas', monospace; background: {COLORS['surface']}; }} "
+            f"a {{ color: {COLORS['accent']}; }} th {{ background: {COLORS['raised']}; }} "
+            f"td, th {{ padding: 5px; border: 1px solid {COLORS['border']}; }} "
+            "h1 { font-size: 15pt; } h2 { font-size: 12pt; } h3 { font-size: 10pt; }")
+
+
+STYLESHEET = stylesheet()

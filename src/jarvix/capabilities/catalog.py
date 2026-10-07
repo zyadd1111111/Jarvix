@@ -6,7 +6,10 @@ BASE_TOOLS = frozenset({"capabilities.load", "notes.search", "notes.create", "ta
     "memory.search", "memory.remember", "apps.list", "apps.open", "projects.list", "files.search",
     "files.read_text", "system.status", "web.open", "web.search", "calculate.evaluate",
     "operator.run", "operator.preview", "workspaces.list", "routines.list", "context.inspect",
-    "intelligence.plan", "documents.summarize", "documents.question"})
+    "intelligence.plan", "intelligence.prepare", "missions.list", "context.graph",
+    "continuity.prepare", "skills.list", "context.profiles.list",
+    "daily.brief", "diagnostics.health", "evaluation.report", "skills.learn_preview",
+    "documents.summarize", "documents.question"})
 
 
 def initial_tools(specs):

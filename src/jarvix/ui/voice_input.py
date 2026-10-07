@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (
 )
 
 from .widgets import button, label
+from .icons import icon
 
 
 class VoiceInputPanel(QWidget):
@@ -23,13 +24,15 @@ class VoiceInputPanel(QWidget):
         self._shutdown = False
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
         layout.addWidget(label("Local dictation", "Heading"))
         layout.addWidget(label(
-            "Hold to talk, release to transcribe. Review the text before sending it to Chat. "
-            "Requires Windows speech recognition and microphone access in Settings.", "Muted", True,
+            "Hold to talk, then review the transcript in Chat. Audio stays local. "
+            "Enable microphone access in Settings first.", "Muted", True,
         ))
         row = QHBoxLayout()
         self.device = QComboBox()
+        self.device.setAccessibleName("Dictation microphone")
         self.device.addItem("System default microphone", None)
         row.addWidget(self.device, 1)
         row.addWidget(button("Find microphones", self.load_devices))
@@ -38,14 +41,19 @@ class VoiceInputPanel(QWidget):
         self.silence.setSingleStep(0.5)
         self.silence.setSuffix(" s silence")
         self.silence.setValue(float(self.services.settings.get("microphone.silence", 2)))
+        self.silence.setAccessibleName("Dictation silence timeout")
         self.silence.valueChanged.connect(lambda value: self.services.settings.set("microphone.silence", value))
         row.addWidget(self.silence)
         layout.addLayout(row)
         self.status = label("Microphone off", "Muted", True)
+        self.status.setAccessibleName("Microphone activity")
         layout.addWidget(self.status)
         controls = QHBoxLayout()
         self.talk = QPushButton("Hold to talk")
         self.talk.setObjectName("Primary")
+        self.talk.setIcon(icon("voice"))
+        self.talk.setAccessibleName("Hold to talk; release to transcribe")
+        self.talk.setToolTip("Hold this button while speaking. Release to transcribe locally.")
         self.talk.pressed.connect(self.press)
         self.talk.released.connect(self.release)
         controls.addWidget(self.talk)
@@ -57,10 +65,14 @@ class VoiceInputPanel(QWidget):
         controls.addWidget(self.continuous)
         layout.addLayout(controls)
         self.transcript = QPlainTextEdit()
+        self.transcript.setAccessibleName("Editable voice transcript")
         self.transcript.setPlaceholderText("Your editable transcript appears here. No audio is sent to a provider.")
         self.transcript.setMinimumHeight(85)
         layout.addWidget(self.transcript)
-        layout.addWidget(button("Review in Chat  ↗", self.review, "Primary"))
+        review_row = QHBoxLayout()
+        review_row.addStretch()
+        review_row.addWidget(button("Review transcript in Chat", self.review))
+        layout.addLayout(review_row)
         self.wake_panel = None
         if hasattr(self.services, "wake_word"):
             from .wake_input import WakeWordPanel
@@ -161,7 +173,7 @@ class VoiceInputPanel(QWidget):
             return
         state = self.microphone.state()
         if not self._starting:
-            self.status.setText(("● MICROPHONE ACTIVE · " if state["active"] else "") + state["status"])
+            self.status.setText(("MICROPHONE ACTIVE · " if state["active"] else "") + state["status"])
         if state["revision"] != self._revision:
             self._revision = state["revision"]
             if state["transcript"]:

@@ -1,6 +1,52 @@
 # Jarvix
 
-Jarvix is a local-first desktop AI assistant built with Python, PySide6 and SQLite. Version 0.6.0, **Adaptive**, adds local models, hybrid knowledge search, supervised execution and reviewed extensions to the existing Intelligence operator.
+Jarvix is a local-first desktop AI assistant built with Python, PySide6 and SQLite. Version 0.9.0 rebuilds the desktop interface around compact workspaces while preserving the existing services, local data and permission boundaries.
+
+## What's new in 0.9.0
+
+**Two interfaces:** the existing interface is now **Legacy**. **Nexus** is a separate warm-cream desktop with cached frosted materials, a liquid command surface, document-style Chat and focused execution/research panes. Choose **Settings → Appearance → Interface**; the choice applies on the next launch so active work stays open. Both interfaces use the same local profile, services, tools and permissions. Legacy remains the default.
+
+Nexus Appearance controls adjust glass strength, transparency and reduced motion. Local Qt materials work without native blur; supported Windows versions can add [DWM Mica/Acrylic backdrops](https://learn.microsoft.com/en-us/windows/win32/api/dwmapi/ne-dwmapi-dwm_systembackdrop_type). The material renderer samples only its own desktop canvas, never the screen or other applications.
+
+- A neutral technical theme, Segoe UI Variable typography, consistent SVG controls and grouped, collapsible navigation.
+- Operator, Missions, Knowledge and Skills open in the main workspace. Projects has its own searchable view using the existing project tools.
+- Home puts commands, current work, today's tasks, model status and recent resources in deliberate sections.
+- Chat uses document-style messages, Markdown tables, compact tool activity and expandable details. Attachments, streaming, cancellation and disclosure approvals retain their existing behavior.
+
+## What got revamped in 0.9
+
+Files uses sortable rows, folder scope and native context menus. System uses compact telemetry and a process table. Integrations shows account status, permissions and connection actions in rows. Settings groups controls by category; workflows, Skills, dialogs and the command overlay share the same restrained controls. The backend and database schema are unchanged.
+
+## What's new in 0.8.0
+
+- **Personal context profiles:** name and pin existing memories, projects, workspaces, Missions and conversations. References persist locally; activation rechecks access, memory scope and expiry. Temporary conversation text remains temporary.
+- **Cross-session checkpoints:** save a bounded progress summary, linked work and suggested next action. Review current sources after restart, reuse project observation plans and inspect retained Operator recovery information. Missing or revoked sources cannot supply stale summaries.
+- **Reviewed Skills:** preview literal recipes from verified Operator work, manual routines or an explicit structured proposal. Edit, duplicate, test, enable/disable and export/import them through existing workflow permissions. Repeated verified work can suggest a routine after an explicit local scan; it never saves itself. Learned patterns exclude terminal commands; explicitly proposed commands retain their original fresh confirmation.
+- **Safe continuation:** explicitly review bounded background observations through the existing supervisor, with deadlines, cancellation and protected session recovery. Only the existing safe metadata reads run unattended; uncertain writes are preserved for inspection, never replayed.
+- **Session and Mission context:** temporary structured goals, files, decisions and unfinished steps expire unless explicitly promoted. Missions support milestones, deadlines, linked Skills and calculated progress. Graph links retain source, relationship type, confidence and scope.
+- **Measured routing:** Local Only, Fast, Balanced, Best Quality and Custom profiles reuse advertised capabilities and saved latency/failure observations. Evaluation separates verified completion, partial work, retries, cancellation and failures; cloud fallback still needs disclosure approval.
+- **Optional daily brief:** combine selected local tasks, Missions and workflow failures. Connected calendar, GitHub and email reads require explicit source/account configuration and a foreground request. Briefs never execute suggestions or upload local context.
+- **Local maintenance:** inspect diagnostics, create checksum-verified SQLite snapshots, prepare an approved backup schedule and stage restores as isolated profiles. Check a configured public release and verify a downloaded artifact without installing it. A developer release checklist reuses Git, version, documentation and owned command results.
+- **Device foundation and notifications:** explicitly paired vault-backed identities authenticate encrypted, expiring offline status/task/note envelopes with replay protection. No remote-control listener or command execution is exposed. Local notifications support grouping, snooze, muted categories and related work.
+
+## What got revamped in 0.8
+
+Home and Ctrl+K connect saved work, Skills, the optional brief, diagnostics and local maintenance. Operator can save selected progress or preview a learned recipe; the action dialog carries the reviewed recipe into its save form and exact confirmation. Saved context does not automatically activate, collect activity or enter AI prompts. Background observations complete only their reviewed reads; they do not resolve uncertain earlier actions or execute a saved next action.
+
+Skill inputs/outputs describe literal recipes; they are not runtime parameter binding. Device transport and companion apps are not implemented. Restores disable unattended work and stored approvals for review; DPAPI-protected data requires the original Windows account. Update installation remains manual; a user-supplied checksum verifies integrity, not publisher identity. Unknown model quality remains unknown.
+
+## What's new in 0.7.0
+
+- **Project continuation:** resolve a selected project or linked Mission, inspect Git/project context and preview a small observation plan. Structured read handoffs share bounded results between specialist roles without copying transcripts or starting unnecessary agents.
+- **Persistent Missions:** link tasks, notes, files, knowledge, conversations and Operator sessions; track progress and blockers, pause/resume, archive or cancel. Resume restores references without replaying uncertain actions.
+- **Context Graph:** explicit local relationships between projects and cross-app references, with current access checks. External references stay unverified until inspected through their connected adapter.
+- **Adaptive routing:** Coding and Document Analysis roles, compatible fallback chains, observed latency/failure history and cooldowns. Local fallbacks are tried first; any cloud fallback requires fresh disclosure approval. Partial streamed replies are preserved without retries.
+- **Optional suggestions:** unfinished saved sessions, failed workflows and due tasks, with reasons, persistent dismissal and muted categories. Off by default; reads saved local metadata and never performs actions or uploads context.
+- **App intelligence:** original tools power adapter dispatch, VS Code file/workspace hints and Git context, Explorer file operations, browser selections/downloads and Jarvix-owned terminal history. Unsupported app internals remain explicit limitations.
+
+## What got revamped in 0.7
+
+The command center and Ctrl+K connect Missions, continuation and suggestions. Chat shows the selected model and fallback; the existing Knowledge dialog includes mission and suggestion management. Nested workflow cancellation now exits inherited pause waits. The thirteen sections, storage, permission boundaries and installation methods remain in place.
 
 ## What's new in 0.6.0
 
@@ -65,11 +111,11 @@ Files opens document/collection actions with citation views. Operator exposes re
 
 ## Install on Windows
 
-For this local version, build or extract `dist\Jarvix-0.6.0-windows-x64.zip`, then run `Jarvix\Jarvix.exe`. You can also run `dist\Jarvix\Jarvix.exe` directly. Keep the extracted folder together, including `_internal`. This is an unsigned portable build.
+For this local version, build or extract `dist\Jarvix-0.9.0-windows-x64.zip`, then run `Jarvix\Jarvix.exe`. You can also run `dist\Jarvix\Jarvix.exe` directly. Keep the extracted folder together, including `_internal`. This is an unsigned portable build.
 
 Published downloads are available from [GitHub Releases](https://github.com/zyadd1111111/Jarvix/releases). A local build does not publish a release; use the version shown on that page, or build the current checkout with `scripts\build.ps1`.
 
-For browser control, load the included `browser_extension` folder as an unpacked extension in Chrome/Edge. In Jarvix Settings, enable browser control; use Actions → `browser.install_bridge` to register that browser's extension ID and the included `JarvixBrowserHost.exe`. Then run `browser.connect` and press Connect in the extension popup. Its Downloads access is optional and removable. Source builds use `assets/browser_extension` and the same packaged helper.
+For browser control, load the included `browser_extension` folder as an unpacked extension in Chrome/Edge. In Jarvix Settings, enable browser control; use Tools → `browser.install_bridge` to register that browser's extension ID and the included `JarvixBrowserHost.exe`. Then run `browser.connect` and press Connect in the extension popup. Its Downloads access is optional and removable. Source builds use `assets/browser_extension` and the same packaged helper.
 
 ## Install from source
 
@@ -91,7 +137,7 @@ Use `--data-dir .\artifacts\test-profile` for an isolated profile. Storage other
 
 1. Add file roots under Settings before using file or developer tools. Protected paths, links and junctions are rejected.
 2. Enable computer control only when needed. Clipboard, screen and microphone permissions start off.
-3. Use **Actions** or **Ctrl+Shift+K** to inspect a tool's arguments and run it locally. Optional fields are omitted unless selected; complex arrays use JSON.
+3. Use **Tools** or **Ctrl+Shift+K** to inspect a tool's arguments and run it locally. Optional fields are omitted unless selected; complex arrays use JSON.
 4. Configure an OpenAI or Gemini key in Settings. Keys use the OS vault, and environment keys take precedence. Local results are previewed before any are shared with a provider.
 5. Select a microphone and hold to talk. Transcription uses an installed Windows speech language locally and does not submit messages automatically.
 6. Open **Operator** to inspect plans and session history. In **Automations**, build and test a workflow, then review its exact actions before enabling it. Enable the overlay and explicit context snapshots separately in Settings.

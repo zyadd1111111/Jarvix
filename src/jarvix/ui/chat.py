@@ -11,11 +11,14 @@ from PySide6.QtGui import QTextDocument, QDesktopServices, QPixmap
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem, QFrame,
     QScrollArea, QComboBox, QLineEdit, QDialog, QPlainTextEdit, QTextBrowser,
-    QSplitter, QApplication, QInputDialog, QFileDialog, QLabel, QMenu,
+    QSplitter, QApplication, QInputDialog, QFileDialog, QLabel, QMenu, QSizePolicy,
 )
 
 from .pages import Page, pretty_date
-from .widgets import label, button, Composer, ChatJob, SignalOrb, clear_layout, TextPreview, evidence_text
+from .widgets import label, button, Composer, ChatJob, clear_layout, TextPreview, evidence_text
+from .icons import icon
+
+MARKDOWN = QTextDocument.MarkdownFeature.MarkdownDialectGitHub | QTextDocument.MarkdownFeature.MarkdownNoHTML
 
 
 class ImageComposer(Composer):
@@ -42,13 +45,14 @@ class MessageText(QTextBrowser):
     def __init__(self, text, parent=None):
         super().__init__(parent)
         self.setFrameShape(QFrame.Shape.NoFrame)
-        self.setStyleSheet("QTextBrowser { background: transparent; border: none; padding: 0; color: #dce3f1; }")
+        self.setObjectName("MessageText")
         self.setOpenExternalLinks(False)
         self.setOpenLinks(False)
         self.anchorClicked.connect(self.open_link)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.document().setDefaultStyleSheet("pre { background:#0b1018; padding:12px; } code { color:#a4bdf1; } a { color:#8cb7ef; }")
-        self.document().setMarkdown(text, QTextDocument.MarkdownFeature.MarkdownNoHTML)
+        from .theme import markdown_stylesheet
+        self.document().setDefaultStyleSheet(markdown_stylesheet())
+        self.document().setMarkdown(text, MARKDOWN)
         self.document().documentLayout().documentSizeChanged.connect(self.fit)
         self.fit()
 
@@ -76,16 +80,15 @@ class PermissionDialog(QDialog):
     def __init__(self, request, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Jarvix · Permission request")
-        self.setMinimumSize(600, 430)
+        self.setMinimumSize(520, 400)
         self.resize(690, 540)
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(25, 24, 25, 24)
-        layout.setSpacing(16)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(12)
         disclose = request.kind == "disclose"
-        layout.addWidget(label("YOUR APPROVAL", "Eyebrow"))
-        layout.addWidget(label("Share this result with the AI provider?" if disclose else "Allow this tool to run?", "Heading", True))
+        layout.addWidget(label("Share with provider" if disclose else "Action requires approval", "Heading", True))
         layout.addWidget(label(request.description, "Muted", True))
-        layout.addWidget(label(f"Tool · {request.tool_name}    Scope · {request.permission}", "Accent", True))
+        layout.addWidget(label(f"{request.tool_name}  ·  {request.permission}", "Code", True))
         preview = QPlainTextEdit()
         preview.setReadOnly(True)
         preview.setPlainText(request.preview or json.dumps(request.arguments, indent=2, ensure_ascii=False))
@@ -116,7 +119,7 @@ class PermissionDialog(QDialog):
 
 class ChatPage(Page):
     title = "Chat"
-    subtitle = "Reason, plan, and act — with a visible boundary around your local data."
+    subtitle = "Conversations, tools and approved context."
 
     def __init__(self, window):
         super().__init__(window)
@@ -133,31 +136,37 @@ class ChatPage(Page):
         self.stream_timer.setInterval(50)
         self.stream_timer.timeout.connect(self.flush_stream)
         split = QSplitter()
+        split.setObjectName("ChatSplit")
+        split.setChildrenCollapsible(False)
         history_widget = QWidget()
         history_layout = QVBoxLayout(history_widget)
-        history_layout.setContentsMargins(0, 0, 5, 0)
-        history_layout.setSpacing(11)
-        history_layout.addWidget(button("+  New conversation", self.new_conversation))
+        history_layout.setContentsMargins(0, 0, 8, 0)
+        history_layout.setSpacing(8)
+        new = button("New conversation", self.new_conversation)
+        new.setIcon(icon("plus"))
+        history_layout.addWidget(new)
         self.history_search = QLineEdit()
         self.history_search.setPlaceholderText("Search conversations…")
+        self.history_search.setAccessibleName("Search conversations")
+        self.history_search.setClearButtonEnabled(True)
         self.history_search.textChanged.connect(self.refresh_history)
         history_layout.addWidget(self.history_search)
         self.history = QListWidget()
-        self.history.setMinimumWidth(165)
-        self.history.setMaximumWidth(270)
+        self.history.setObjectName("ConversationList")
+        self.history.setMinimumWidth(150)
+        self.history.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.history.customContextMenuRequested.connect(self.history_menu)
         self.history.currentItemChanged.connect(self.select_conversation)
         history_layout.addWidget(self.history)
         history_actions = QHBoxLayout()
-        history_actions.addWidget(button("Rename", self.rename_conversation, "Quiet"))
-        history_actions.addWidget(button("Pin", self.pin_conversation, "Quiet"))
-        history_actions.addWidget(button("Delete", self.delete_conversation, "Quiet"))
+        history_actions.addWidget(button("Conversation actions", self.history_menu, "Quiet"))
         history_layout.addLayout(history_actions)
         history_layout.addWidget(label("Stored on this device", "Muted"))
         split.addWidget(history_widget)
         content = QWidget()
         body = QVBoxLayout(content)
-        body.setContentsMargins(10, 0, 0, 0)
-        body.setSpacing(12)
+        body.setContentsMargins(8, 0, 0, 0)
+        body.setSpacing(8)
         toolbar = QHBoxLayout()
         self.provider = QComboBox()
         self.provider.addItem("OpenAI", "openai")
@@ -166,64 +175,116 @@ class ChatPage(Page):
         self.provider.addItem("Local endpoint", "local")
         self.provider.addItem("Automatic routing", "auto")
         self.provider.currentIndexChanged.connect(self.change_provider)
+        self.provider.setAccessibleName("AI provider")
+        self.provider.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
         self.model = QLineEdit()
         self.model.setPlaceholderText("Model identifier")
-        self.model.setMaximumWidth(230)
+        self.model.setMinimumWidth(95)
+        self.model.setAccessibleName("Model identifier")
+        self.model.setObjectName("ModelIdentifier")
         toolbar.addWidget(self.provider)
         toolbar.addWidget(self.model)
         self.task_role = QComboBox()
-        self.task_role.addItems(["chat", "planning", "summarization"])
+        self.task_role.addItems(["chat", "planning", "coding", "document_analysis", "summarization"])
         self.task_role.setToolTip("Automatic routing uses this task role; an explicitly selected provider/model overrides routing.")
+        self.task_role.setAccessibleName("Task routing role")
         self.task_role.setCurrentText(self.services.settings.get("chat.role", "chat"))
         self.task_role.currentTextChanged.connect(lambda value: self.services.settings.set("chat.role", value))
         toolbar.addWidget(self.task_role)
         toolbar.addStretch()
-        toolbar.addWidget(button("Context", self.inspect_context, "Quiet"))
-        toolbar.addWidget(button("Retry / regenerate", self.regenerate, "Quiet"))
+        self.context_button = button("Context", self.inspect_context, "Quiet")
+        self.context_button.setToolTip("Inspect the exact context and tools for the next request")
+        toolbar.addWidget(self.context_button)
         body.addLayout(toolbar)
         self.transcript = QScrollArea()
+        self.transcript.setObjectName("ConversationTranscript")
+        self.transcript.setFrameShape(QFrame.Shape.NoFrame)
         self.transcript.setWidgetResizable(True)
         self.messages_widget = QWidget()
         self.messages = QVBoxLayout(self.messages_widget)
-        self.messages.setContentsMargins(0, 10, 7, 10)
-        self.messages.setSpacing(16)
+        self.messages.setContentsMargins(0, 8, 8, 8)
+        self.messages.setSpacing(8)
         self.messages.setAlignment(Qt.AlignmentFlag.AlignTop)
         self.transcript.setWidget(self.messages_widget)
         body.addWidget(self.transcript, 1)
-        self.activity = label("Ready · only this conversation enters the AI context", "Muted", True)
+        self.activity = label("Ready · conversation context only", "Muted", True)
+        self.activity.setAccessibleName("Chat activity")
         body.addWidget(self.activity)
         self.timeline = QListWidget()
-        self.timeline.setMaximumHeight(105)
+        self.timeline.setObjectName("ToolTimeline")
+        self.timeline.setMaximumHeight(130)
+        self.timeline.setAccessibleName("Tool execution activity")
         self.timeline.setVisible(False)
         self.timeline.itemActivated.connect(self.inspect_event)
         body.addWidget(self.timeline)
-        self.attachment_label = label("Images stay local until you approve cloud vision for this request.", "Muted", True)
+        self.attachment_label = label("", "Muted", True)
+        self.attachment_label.hide()
         body.addWidget(self.attachment_label)
         self.composer = ImageComposer()
-        self.composer.setPlaceholderText("Message Jarvix…    Enter to send · Shift+Enter for a new line")
-        self.composer.setFixedHeight(92)
+        self.composer.setObjectName("Composer")
+        self.composer.setPlaceholderText("Ask Jarvix or tell it to do something…")
+        self.composer.setAccessibleName("Message Jarvix")
+        from .theme import TOKENS
+        self.composer.setFixedHeight(TOKENS["control_height"] * 3 + TOKENS["spacing"][2])
         self.composer.submitted.connect(self.send)
         self.composer.images_dropped.connect(self.add_images)
         self.composer.image_pasted.connect(self.paste_image)
         body.addWidget(self.composer)
         actions = QHBoxLayout()
-        actions.addWidget(button("Attach", self.choose_images, "Quiet"))
-        actions.addWidget(button("Screen", self.screen_menu, "Quiet"))
-        actions.addWidget(button("Clear images", self.clear_images, "Quiet"))
-        self.connection = label("", "Muted")
-        actions.addWidget(self.connection)
+        input_tools = QHBoxLayout()
+        self.attach_button = button("Attach image", self.choose_images, "Quiet")
+        self.screen_button = button("Capture screen", self.screen_menu, "Quiet")
+        input_tools.addWidget(self.attach_button)
+        input_tools.addWidget(self.screen_button)
+        voice = button("Voice", lambda: self.window.navigate("Voice"), "Quiet")
+        voice.setIcon(icon("voice"))
+        input_tools.addWidget(voice)
+        self.clear_attachments_button = button("Clear images", self.clear_images, "Quiet")
+        self.clear_attachments_button.hide()
+        input_tools.addWidget(self.clear_attachments_button)
+        input_tools.addStretch()
+        body.insertLayout(body.indexOf(self.composer), input_tools)
+        self.regenerate_button = button("Regenerate", self.regenerate, "Quiet")
+        self.regenerate_button.setToolTip("Branch from the latest user message and request another response")
+        actions.addWidget(self.regenerate_button)
         actions.addStretch()
-        self.stop = button("Stop", self.cancel)
+        self.stop = button("Stop response", self.cancel)
+        self.stop.setIcon(icon("square"))
         self.stop.setEnabled(False)
-        self.send_button = button("Send message  ↑", self.send, "Primary")
+        self.send_button = button("Send message", self.send, "Primary")
         actions.addWidget(self.stop)
         actions.addWidget(self.send_button)
         body.addLayout(actions)
+        footer = QHBoxLayout()
+        self.connection = label("", "Muted")
+        footer.addWidget(self.connection)
+        footer.addStretch()
+        footer.addWidget(label("Enter to send · Shift+Enter for a new line", "Caption"))
+        body.addLayout(footer)
         split.addWidget(content)
         split.setSizes([215, 770])
         self.layout.addWidget(split, 1)
         self.reload_provider()
         self.render_messages()
+
+    def history_menu(self, position=None):
+        if position is not None:
+            item = self.history.itemAt(position)
+            if item and not self.busy:
+                self.history.setCurrentItem(item)
+        menu = QMenu(self)
+        for text, callback, name in (("Rename conversation", self.rename_conversation, "file"),
+                                     ("Pin / unpin conversation", self.pin_conversation, "pin"),
+                                     ("Export conversation", self.export_conversation, "folder"),
+                                     ("Delete conversation", self.delete_conversation, "trash")):
+            action = menu.addAction(icon(name), text, callback)
+            action.setEnabled(bool(self.conversation_id) and not self.busy)
+        menu.exec(self.history.mapToGlobal(position) if position is not None else
+                  self.history.mapToGlobal(self.history.rect().bottomLeft()))
+
+    def export_conversation(self):
+        if self.conversation_id and not self.busy:
+            self.window.open_capabilities("conversations.export", {"id": self.conversation_id})
 
     @property
     def busy(self):
@@ -255,9 +316,9 @@ class ChatPage(Page):
         ready = self.services.provider_status().get(self.provider.currentData(), False)
         provider_id = self.provider.currentData()
         local = provider_id in {"ollama", "local"}
-        self.connection.setText(("● Local endpoint configured" if ready else "○ Select a local model in Knowledge & Models")
+        self.connection.setText(("Local endpoint configured" if ready else "Select a local model in Knowledge & Models")
                                 if local else "Automatic · inspect task routing" if provider_id == "auto"
-                                else "● Key configured" if ready else "○ Add an API key in Integrations")
+                                else "API key configured" if ready else "Add an API key in Integrations")
 
     def refresh(self):
         self.refresh_history()
@@ -267,7 +328,9 @@ class ChatPage(Page):
         self.history.blockSignals(True)
         self.history.clear()
         for conversation in self.services.conversations.search(self.history_search.text()):
-            item = QListWidgetItem(("★ " if conversation["pinned"] else "") + conversation.get("title", "Conversation") + "\n" + pretty_date(conversation.get("updated_at")))
+            item = QListWidgetItem(conversation.get("title", "Conversation") + "\n" + pretty_date(conversation.get("updated_at")))
+            if conversation["pinned"]:
+                item.setIcon(icon("pin"))
             item.setData(Qt.ItemDataRole.UserRole, conversation["id"])
             self.history.addItem(item)
             if conversation["id"] == self.conversation_id:
@@ -358,13 +421,13 @@ class ChatPage(Page):
         rows = self.services.conversation_messages(self.conversation_id) if self.conversation_id else []
         if not rows:
             empty = QFrame()
+            empty.setObjectName("ChatEmptyState")
             layout = QVBoxLayout(empty)
-            layout.setContentsMargins(25, 38, 25, 25)
-            layout.setSpacing(15)
-            layout.addWidget(SignalOrb(82), alignment=Qt.AlignmentFlag.AlignHCenter)
-            layout.addWidget(label("A clearer way to work.", "Title"), alignment=Qt.AlignmentFlag.AlignHCenter)
-            layout.addWidget(label("Ask a question or give Jarvix a task. Tools use structured arguments, and sensitive actions wait for your decision.", "Muted", True))
-            for example in ("What applications are using the most RAM?", "Remember that Jarvix development is my main project.", "Search my notes for Gemini."):
+            layout.setContentsMargins(12, 16, 12, 16)
+            layout.setSpacing(8)
+            layout.addWidget(label("Start a conversation", "Heading"))
+            layout.addWidget(label("Ask a question or describe a task. Jarvix requests approval before sensitive actions or sharing local results.", "Muted", True))
+            for example in ("Show processes using the most RAM", "Find my unfinished tasks", "Search my notes"):
                 layout.addWidget(button(example, lambda text=example: self.set_draft(text), "Quiet"))
             self.messages.addWidget(empty)
         for index, row in enumerate(rows):
@@ -374,23 +437,29 @@ class ChatPage(Page):
 
     def add_message(self, role, content, index=None):
         frame = QFrame()
+        frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         frame.setObjectName("UserMessage" if role == "user" else "Message")
         layout = QVBoxLayout(frame)
-        layout.setContentsMargins(17, 13, 17, 13)
-        layout.setSpacing(9)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(6)
         header = QHBoxLayout()
-        header.addWidget(label("YOU" if role == "user" else "JARVIX", "Eyebrow"))
+        header.addWidget(label("You" if role == "user" else "Jarvix", "MessageAuthor"))
         header.addStretch()
         header.addWidget(button("Copy", lambda: QApplication.clipboard().setText(content), "Quiet"))
         if role == "user" and index is not None:
-            header.addWidget(button("Edit and resend", lambda: self.revise_message(index), "Quiet"))
+            header.addWidget(button("Edit message", lambda: self.revise_message(index), "Quiet"))
         if role == "assistant":
             self.last_answer = content
-            header.addWidget(button("Read aloud", lambda: self.window.run_job(lambda: self.services.speak(content), self.window.pages["Voice"].speech_started), "Quiet"))
-            header.addWidget(button("Make task", lambda: self.window.guard(lambda: (
-                self.services.add_task(content[:500]), self.window.notify("Task created"))), "Quiet"))
-            header.addWidget(button("Save note", lambda: self.window.guard(lambda: (
-                self.services.save_note("From Jarvix", content), self.window.notify("Note saved"))), "Quiet"))
+            more = button("Response actions", style="Quiet")
+            menu = QMenu(more)
+            menu.addAction(icon("voice"), "Read aloud", lambda: self.window.run_job(
+                lambda: self.services.speak(content), self.window.pages["Voice"].speech_started))
+            menu.addAction(icon("tasks"), "Create task", lambda: self.window.guard(lambda: (
+                self.services.add_task(content[:500]), self.window.notify("Task created"))))
+            menu.addAction(icon("notes"), "Save as note", lambda: self.window.guard(lambda: (
+                self.services.save_note("From Jarvix", content), self.window.notify("Note saved"))))
+            more.setMenu(menu)
+            header.addWidget(more)
         layout.addLayout(header)
         layout.addWidget(MessageText(content))
         self.messages.addWidget(frame)
@@ -398,6 +467,11 @@ class ChatPage(Page):
 
     def scroll_to_bottom(self):
         QTimer.singleShot(30, self, lambda: self.transcript.verticalScrollBar().setValue(self.transcript.verticalScrollBar().maximum()))
+
+    def fit_timeline(self):
+        height = sum(max(32, self.timeline.item(index).sizeHint().height())
+                     for index in range(self.timeline.count()))
+        self.timeline.setFixedHeight(min(130, height + 8))
 
     def set_draft(self, text):
         self.composer.setPlainText(text)
@@ -416,12 +490,16 @@ class ChatPage(Page):
             self.window.notify("Attach up to four PNG, JPEG, WebP or BMP images.")
             return
         self.attachments = selected
-        self.attachment_label.setText("Local images · " + ", ".join(Path(path).name for path in selected)
-                                      if selected else "Images stay local until you approve cloud vision for this request.")
+        self.attachment_label.setText("Attached locally · " + ", ".join(Path(path).name for path in selected)
+                                      + "\nCloud vision requires your approval." if selected else "")
+        self.attachment_label.setVisible(bool(selected))
+        self.clear_attachments_button.setVisible(bool(selected))
 
     def clear_images(self):
         self.attachments = []
-        self.attachment_label.setText("Images stay local until you approve cloud vision for this request.")
+        self.attachment_label.clear()
+        self.attachment_label.hide()
+        self.clear_attachments_button.hide()
 
     def paste_image(self, image):
         if self.busy:
@@ -487,7 +565,7 @@ class ChatPage(Page):
 
     def flush_stream(self):
         if self.stream_widget:
-            self.stream_widget.document().setMarkdown(self.stream_buffer, QTextDocument.MarkdownFeature.MarkdownNoHTML)
+            self.stream_widget.document().setMarkdown(self.stream_buffer, MARKDOWN)
             self.stream_widget.fit()
             self.scroll_to_bottom()
         self.stream_timer.stop()
@@ -515,6 +593,9 @@ class ChatPage(Page):
         self.operator_items.clear()
         self.timeline.setVisible(False)
         self.send_button.setEnabled(False)
+        self.regenerate_button.setEnabled(False)
+        self.attach_button.setEnabled(False)
+        self.screen_button.setEnabled(False)
         self.stop.setEnabled(True)
         self.provider.setEnabled(False)
         self.model.setEnabled(False)
@@ -534,15 +615,29 @@ class ChatPage(Page):
     def on_activity(self, kind, data):
         if self.window.closing:
             return
+        if kind == "model_selected":
+            provider, model = data.get("provider", ""), data.get("model", "")
+            title = f"Model · {provider} · {model}"
+            self.connection.setText(f"Handled by {provider} · {model}")
+            self.activity.setText(title)
+            item = QListWidgetItem(title)
+            item.setData(Qt.ItemDataRole.UserRole, data)
+            self.timeline.addItem(item)
+            self.fit_timeline()
+            self.timeline.setVisible(True)
+            self.timeline.scrollToBottom()
+            return
         if kind == "stream_start":
             self.clear_stream()
             return
         if kind == "text_delta":
             if not self.stream_widget:
                 self.stream_frame = QFrame()
+                self.stream_frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
                 self.stream_frame.setObjectName("Message")
                 layout = QVBoxLayout(self.stream_frame)
-                layout.addWidget(label("JARVIX · Responding", "Eyebrow"))
+                layout.setContentsMargins(12, 10, 12, 10)
+                layout.addWidget(label("Jarvix · responding", "MessageAuthor"))
                 self.stream_widget = MessageText("")
                 layout.addWidget(self.stream_widget)
                 self.messages.addWidget(self.stream_frame)
@@ -567,9 +662,10 @@ class ChatPage(Page):
             self.timeline.addItem(item)
             if kind == "tool_result":
                 self.install_action_card(item, data)
+            self.fit_timeline()
             self.timeline.setVisible(True)
             self.timeline.scrollToBottom()
-        names = {"provider": "Waiting for the AI provider…", "tool": "Running an approved tool…", "provider_request": "Waiting for the AI provider…", "tool_start": "Running an approved tool…", "tool_result": "Tool returned a structured result", "permission": "Waiting for your approval…", "complete": "Response complete"}
+        names = {"provider": "Waiting for provider…", "tool": "Running approved tool…", "provider_request": "Waiting for provider…", "tool_start": "Running approved tool…", "tool_result": "Action result", "permission": "Waiting for approval…", "complete": "Response complete"}
         description = names.get(kind, kind.replace("_", " ").capitalize())
         tool = data.get("tool") or data.get("tool_name") or data.get("name")
         self.activity.setText(description + (f" · {tool}" if tool else ""))
@@ -579,21 +675,24 @@ class ChatPage(Page):
         result = data.get("result", data)
         value = result.get("data") or {}
         value = value if isinstance(value, dict) else {}
-        title = {"files.move": "FILE MOVED", "files.rename": "FILE RENAMED", "files.copy": "FILE COPIED",
-                 "apps.open": "APP OPENED", "workflows.save": "AUTOMATION SAVED", "workspaces.launch": "WORKSPACE OPENED",
-                 "tasks.create": "TASK CREATED", "notes.create": "NOTE CREATED"}.get(name, name.replace(".", " · ").upper())
+        title = {"files.move": "Moved file", "files.rename": "Renamed file", "files.copy": "Copied file",
+                 "apps.open": "Opened application", "workflows.save": "Saved automation", "workspaces.launch": "Opened workspace",
+                 "tasks.create": "Created task", "notes.create": "Created note"}.get(name, name.replace(".", " · "))
         card = QWidget()
+        card.setObjectName("ToolRow")
         layout = QHBoxLayout(card)
         layout.setContentsMargins(8, 4, 8, 4)
         summary = QVBoxLayout()
         summary.setSpacing(3)
-        summary.addWidget(label(title if result.get("ok", True) else name + " · FAILED", "Eyebrow"))
+        summary.addWidget(label(title if result.get("ok", True) else name + " · failed", "SectionTitle"))
         detail = value.get("path") or value.get("name") or result.get("error")
+        if value.get("source") and value.get("destination"):
+            detail = f"{value['source']} → {value['destination']}"
         if detail:
             summary.addWidget(label(str(detail)[:220], "Muted", True))
         layout.addLayout(summary, 1)
         layout.addStretch()
-        layout.addWidget(button("View", lambda: self.inspect_event(item), "Quiet"))
+        layout.addWidget(button("Details", lambda: self.inspect_event(item), "Quiet"))
         cited = evidence_text(value)
         if cited:
             layout.addWidget(button("Sources", lambda: TextPreview(
@@ -611,11 +710,12 @@ class ChatPage(Page):
         if name in {"operator.run", "operator.retry", "operator.replan"} and value.get("id"):
             layout.addWidget(button("Session", lambda: self.window.open_operator(value["id"]), "Quiet"))
         elif name == "notes.create" and value.get("id"):
-            layout.addWidget(button("Open", lambda: self.window.open_note(value["id"]), "Quiet"))
+            layout.addWidget(button("Open note", lambda: self.window.open_note(value["id"]), "Quiet"))
         elif name == "tasks.create" and value.get("id"):
-            layout.addWidget(button("Open", lambda: self.window.open_task(value["id"]), "Quiet"))
-        item.setSizeHint(card.sizeHint())
+            layout.addWidget(button("Open task", lambda: self.window.open_task(value["id"]), "Quiet"))
         self.timeline.setItemWidget(item, card)
+        card.ensurePolished()
+        item.setSizeHint(card.sizeHint())
 
     def show_operator_card(self, session):
         session_id = session.get("id")
@@ -630,15 +730,17 @@ class ChatPage(Page):
         done = sum(step.get("status") in {"complete", "completed"} for step in steps)
         state = session.get("status", "planning").replace("_", " ")
         item.setData(Qt.ItemDataRole.UserRole, session)
-        item.setText(f"OPERATOR TASK · {done}/{len(steps)} steps · {state}")
+        item.setText(f"Operator · {done}/{len(steps)} steps · {state}")
         card = QWidget()
         row = QHBoxLayout(card)
         row.setContentsMargins(8, 4, 8, 4)
-        row.addWidget(label(f"OPERATOR · {done}/{len(steps)} · {state}", "Accent"))
+        row.addWidget(label(f"Operator · {done}/{len(steps)} steps · {state}", "SectionTitle"))
         row.addStretch()
         row.addWidget(button("View session", lambda: self.window.open_operator(session_id), "Quiet"))
-        item.setSizeHint(card.sizeHint())
         self.timeline.setItemWidget(item, card)
+        card.ensurePolished()
+        item.setSizeHint(card.sizeHint())
+        self.fit_timeline()
         self.timeline.show()
         self.activity.setText("Operator · " + state)
 
@@ -687,6 +789,9 @@ class ChatPage(Page):
         if worker:
             worker.deleteLater()
         self.send_button.setEnabled(True)
+        self.regenerate_button.setEnabled(True)
+        self.attach_button.setEnabled(True)
+        self.screen_button.setEnabled(True)
         self.stop.setEnabled(False)
         self.provider.setEnabled(True)
         self.model.setEnabled(True)

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "jarvix"
-version = "0.6.0"
+version = "0.9.0"
 description = "A local-first desktop AI command center"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -19,6 +19,7 @@ dependencies = [
   "platformdirs>=4.3,<5",
   "pypdf>=6.19,<7",
   "sounddevice>=0.5,<1",
+  "cryptography>=46,<48",
 ]
 
 [project.optional-dependencies]

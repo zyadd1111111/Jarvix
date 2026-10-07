@@ -7,6 +7,7 @@ import subprocess
 import threading
 import copy
 import math
+import time
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -52,6 +53,7 @@ class Services:
         self.registry = build_registry(self)
         self.voice = VoiceService()
         self.orchestrator = Orchestrator(self.registry, self.permissions, self.repository, self.execute_tool)
+        self.orchestrator.provider_guard = self.check_provider_policy
         self.latest_context: dict = {}
         self._chat_lock = threading.Lock()
         self._automation_lock = threading.Lock()
@@ -61,13 +63,17 @@ class Services:
         from jarvix.capabilities import notifications, automations, chat_management, integration, catalog
         from jarvix.capabilities import desktop, workflows, operator, undo, context, scheduler, recycle
         from jarvix.capabilities import documents, intelligence, search, knowledge, supervisor, plugins
-        from jarvix.capabilities import windows_integration, app_adapters
+        from jarvix.capabilities import windows_integration, app_adapters, context_graph, missions, proactive
+        from jarvix.capabilities import skills, continuity
+        from jarvix.capabilities import evaluation, daily, diagnostics, maintenance
+        from jarvix.capabilities import device_bridge
         from jarvix import data_protection
         from jarvix.speech_input import SpeechInputService
         for module in (files, documents, developer, computer, productivity, browser, workspaces,
                        notifications, automations, chat_management, integration, desktop, workflows,
                        undo, operator, context, scheduler, recycle, intelligence, search, knowledge,
-                       supervisor, data_protection, windows_integration, app_adapters):
+                       supervisor, data_protection, windows_integration, app_adapters, context_graph, missions, proactive,
+                       skills, continuity, evaluation, daily, diagnostics, maintenance, device_bridge):
             module.setup(self, self.registry)
         self._setup_models()
         plugins.setup(self, self.registry)
@@ -101,6 +107,10 @@ class Services:
                 schedule_snapshot = None
                 if name == "plugins.enable":
                     preview_arguments = {**arguments, "extension": self.plugins.preview(arguments["id"])}
+                if name == "skills.save":
+                    preview_arguments = {**arguments, "recipe": self.skills.save_preview(**arguments)}
+                if name == "skills.run":
+                    preview_arguments = {**arguments, "recipe": self.skills.preview(arguments["id"])}
                 if name == "windows.set_startup":
                     preview_arguments = {**arguments, "startup": self.windows_integration.startup_preview()}
                 if name == "scheduler.install":
@@ -134,6 +144,7 @@ class Services:
                 on_event = on_event or context.on_event
                 if on_event:
                     on_event("tool", {"name": name, "status": "Running"})
+                started = time.monotonic()
                 reversible = self.undo.prepare(name, arguments) if hasattr(self, "undo") else None
                 previous_app = context.approved_app
                 context.approved_app = app_preview
@@ -151,7 +162,9 @@ class Services:
                         self.repository.audit("undo", "Action completed; no undo receipt could be recorded")
                 self.repository.audit("tool", f"{name}: {'completed' if result.ok else 'failed'}")
                 self.records.put("action_history", {"tool": name, "ok": result.ok,
-                                                   "permission_level": spec.permission_level})
+                    "permission_level": spec.permission_level,
+                    "latency_ms": round((time.monotonic() - started) * 1000, 2),
+                    "failure_class": None if result.ok else "tool_failure"})
                 return result
         except InterruptedError:
             return ToolResult(False, error="Operation stopped or timed out.")
@@ -384,7 +397,7 @@ class Services:
 
     def make_provider(self, provider_id):
         from jarvix.providers import create_provider, LOCAL_PROVIDER_URLS
-        local_only = self.settings.get("ai.local_only", False)
+        local_only = self.routing_options()["local_only"]
         if provider_id in LOCAL_PROVIDER_URLS:
             return create_provider(provider_id, base_url=self.settings.get("endpoint." + provider_id,
                                    LOCAL_PROVIDER_URLS[provider_id]), local_only=local_only)
@@ -394,6 +407,10 @@ class Services:
         if not key:
             raise ProviderError(f"Configure your {provider_id.title()} API key in Integrations to use AI chat. Local tools remain available.")
         return create_provider(provider_id, key)
+
+    def check_provider_policy(self, provider):
+        if not getattr(provider, "is_local", False) and self.routing_options()["local_only"]:
+            raise ProviderError("Local-only mode blocks this cloud request.")
 
     def discover_models(self, provider_id):
         from jarvix.providers import LOCAL_PROVIDER_URLS
@@ -405,6 +422,8 @@ class Services:
             configured = {self.settings.get("model." + provider_id, "")}
             configured.update(choice["model"] for choice in self.settings.get("routing.roles", {}).values()
                               if choice.get("provider") == provider_id)
+            configured.update(choice["model"] for chain in self.settings.get("routing.fallbacks", {}).values()
+                              for choice in chain if choice.get("provider") == provider_id)
             for index, model in enumerate(health.get("models", [])):
                 if model["id"] in configured:
                     try:
@@ -421,9 +440,22 @@ class Services:
         from jarvix.providers import DEFAULT_MODELS
         candidates = []
         costs = self.settings.get("routing.costs", {})
+        outcomes = {(item["provider"], item["model"]): item for item in self.records.list("model_outcome")}
         def cost(provider, model):
             value = costs.get(provider + ":" + model)
             return value if type(value) in {int, float} and math.isfinite(value) and 0 <= value <= 1000000 else None
+        def performance(provider, model):
+            state = outcomes.get((provider, model), {})
+            failures = state.get("consecutive_failures", 0)
+            healthy = True
+            if failures >= 3:
+                # ponytail: one-minute model cooldown; widen to provider circuits if real traffic needs it.
+                try:
+                    last_failure = datetime.fromisoformat(state["last_failure"])
+                    healthy = (datetime.now(timezone.utc) - last_failure).total_seconds() >= 60
+                except (KeyError, ValueError, TypeError):
+                    healthy = False
+            return {"healthy": healthy, "failure_count": failures, "latency_ms": state.get("latency_ms")}
         for provider_id in ("ollama", "local"):
             if refresh:
                 try:
@@ -439,13 +471,15 @@ class Services:
                 candidates.append(ModelCandidate(provider_id, model["id"], frozenset(model.get("capabilities", [])),
                     model.get("context_length"), is_local=True,
                     available=health.get("available") is True and model.get("available", True) is True,
-                    cost=cost(provider_id, model["id"])))
-        if not self.settings.get("ai.local_only", False):
+                    cost=cost(provider_id, model["id"]), **performance(provider_id, model["id"])))
+        if not self.routing_options()["local_only"]:
             for provider_id in ("openai", "gemini"):
                 if self.vault.get(provider_id):
                     models = {self.settings.get("model." + provider_id, DEFAULT_MODELS[provider_id])}
                     models.update(choice["model"] for choice in self.settings.get("routing.roles", {}).values()
                                   if choice.get("provider") == provider_id)
+                    models.update(choice["model"] for chain in self.settings.get("routing.fallbacks", {}).values()
+                                  for choice in chain if choice.get("provider") == provider_id)
                     for model in sorted(models):
                         # Existing bundled defaults have known adapter support. A custom
                         # cloud model is usable explicitly but gains no invented metadata.
@@ -453,14 +487,26 @@ class Services:
                         candidates.append(ModelCandidate(provider_id, model,
                             frozenset({"tools", "vision", "completion"}) if known else frozenset(),
                             1_047_576 if known and provider_id == "openai" else 1_048_576 if known else None,
-                            cost=cost(provider_id, model)))
-        return ModelRouter(candidates, self.settings.get("routing.roles", {}))
+                            cost=cost(provider_id, model), **performance(provider_id, model)))
+        return ModelRouter(candidates, self.settings.get("routing.roles", {}),
+                           self.settings.get("routing.fallbacks", {}))
 
     def route_model(self, task="chat", require_tools=False, require_vision=False, context_tokens=0):
-        return self.model_router(refresh=True).select(task, require_tools=require_tools, require_vision=require_vision,
-            context_tokens=context_tokens, local_only=self.settings.get("ai.local_only", False),
-            prefer_local=self.settings.get("routing.prefer_local", True),
-            cost_preference=self.settings.get("routing.cost_preference", "balanced")).as_dict()
+        return self.route_models(task, require_tools, require_vision, context_tokens)[0]
+
+    def route_models(self, task="chat", require_tools=False, require_vision=False, context_tokens=0):
+        return [item.as_dict() for item in self.model_router(refresh=True).chain(task,
+            require_tools=require_tools, require_vision=require_vision, context_tokens=context_tokens,
+            **self.routing_options())]
+
+    def routing_options(self):
+        if hasattr(self, "evaluation"):
+            return self.evaluation.routing_options()
+        return {"local_only": self.settings.get("ai.local_only", False),
+                "prefer_local": self.settings.get("routing.prefer_local", True),
+                "prefer_cloud": self.settings.get("routing.prefer_cloud", False),
+                "cost_preference": self.settings.get("routing.cost_preference", "balanced"),
+                "latency_preference": self.settings.get("routing.latency_preference", "balanced")}
 
     def configure_model_role(self, role, provider_id, model):
         from jarvix.model_router import MODEL_ROLES
@@ -470,6 +516,67 @@ class Services:
         roles[role] = {"provider": provider_id, "model": required_text(model, "Model", 150)}
         self.settings.set("routing.roles", roles)
         return {"role": role, **roles[role]}
+
+    def configure_model_fallbacks(self, role, models):
+        from jarvix.model_router import ModelRouter
+        ModelRouter([], fallbacks={role: models})
+        if any(not isinstance(choice, dict) or choice["provider"] not in {"openai", "gemini", "ollama", "local"}
+               for choice in models):
+            raise ValueError("Choose supported fallback providers.")
+        chains = self.settings.get("routing.fallbacks", {})
+        chains[role] = [{"provider": choice["provider"], "model": required_text(choice["model"], "Model", 150)}
+                        for choice in models]
+        self.settings.set("routing.fallbacks", chains)
+        return {"role": role, "models": chains[role]}
+
+    def record_model_outcome(self, provider_id, model, success, latency_ms):
+        if (provider_id not in {"openai", "gemini", "ollama", "local"} or type(success) is not bool
+                or type(latency_ms) not in {int, float} or not math.isfinite(latency_ms)
+                or not 0 <= latency_ms <= 86_400_000):
+            raise ValueError("Model outcomes need a supported provider, success flag and finite latency.")
+        model = required_text(model, "Model", 150)
+        identity = provider_id + ":" + model
+        try:
+            state = self.records.get("model_outcome", identity)
+        except ValueError:
+            state = {"provider": provider_id, "model": model, "successes": 0,
+                     "failures": 0, "consecutive_failures": 0}
+        state["successes" if success else "failures"] += 1
+        state["consecutive_failures"] = 0 if success else state["consecutive_failures"] + 1
+        state["last_success" if success else "last_failure"] = now_iso()
+        state["last_result"] = "success" if success else "failure"
+        previous = state.get("latency_ms")
+        state["latency_ms"] = round(.7 * previous + .3 * latency_ms if previous is not None else latency_ms, 2)
+        self.records.put("model_outcome", state, identity)
+        return state
+
+    def model_health(self):
+        return {"providers": self.records.list("provider_health"), "models": self.records.list("model_outcome")}
+
+    def approve_model_fallback(self, provider_id, model, messages, approve):
+        from jarvix.attachments import context_message
+        from jarvix.domain import PermissionRequest
+        if self.routing_options()["local_only"]:
+            raise PermissionError("Local-only mode blocks cloud model fallback.")
+        if provider_id not in {"openai", "gemini"}:
+            raise ValueError("Cloud fallback disclosure requires a supported cloud provider.")
+        model = required_text(model, "Model", 150)
+        check_cancelled()
+        manifest = {"provider": provider_id, "model": model,
+                    "messages": [context_message(message) for message in messages],
+                    "scope": "This fallback request only. Local results still require their own disclosure approval."}
+        images = tuple(image for message in messages for image in message.images)
+        request = PermissionRequest("disclose", "models.fallback", "cloud.context",
+            "The local model failed. Share this exact conversation and its attached images with the cloud fallback?",
+            manifest, json.dumps(manifest, ensure_ascii=False, indent=2), images)
+        approved = bool(approve(request))
+        self.repository.audit("permission", f"models.fallback: {'approved' if approved else 'denied'}")
+        check_cancelled()
+        if not approved:
+            raise PermissionError("Cloud fallback disclosure was denied. The conversation remains local.")
+        if self.routing_options()["local_only"]:
+            raise PermissionError("Local-only mode now blocks cloud model fallback.")
+        return True
 
     def embedding_provider(self):
         route = self.settings.get("routing.roles", {}).get("embeddings")
@@ -499,16 +606,24 @@ class Services:
                 "source": "User supplied; pricing is not fetched or verified."}
 
     def _setup_models(self):
-        from jarvix.capabilities.schema import BOOL, enum, integer, register, string
+        from jarvix.capabilities.schema import BOOL, array, enum, integer, register, schema, string
+        from jarvix.model_router import MODEL_ROLES
+        roles = enum(*sorted(MODEL_ROLES))
         register(self.registry, "models.discover", "Check a configured loopback endpoint and discover its exposed capabilities. Never downloads models.",
                  {"provider_id": enum("ollama", "local")}, ("provider_id",), self.discover_models)
         register(self.registry, "models.route", "Preview a configured model choice based on task, capability and privacy requirements.",
-                 {"task": enum("chat", "planning", "summarization", "embeddings", "vision"), "require_tools": BOOL,
+                 {"task": roles, "require_tools": BOOL,
                   "require_vision": BOOL, "context_tokens": integer(0, 1000000)}, (), self.route_model)
         register(self.registry, "models.configure_role", "Configure an explicit model for a task role. Local-only mode still applies.",
-                 {"role": enum("chat", "planning", "summarization", "embeddings", "vision"),
+                 {"role": roles,
                   "provider_id": enum("openai", "gemini", "ollama", "local"), "model": string(150)},
                  ("role", "provider_id", "model"), self.configure_model_role, 2)
+        register(self.registry, "models.configure_fallbacks", "Set an ordered compatible model fallback chain. Cloud fallback from a local request always asks for fresh disclosure approval.",
+                 {"role": roles, "models": array(schema({"provider": enum("openai", "gemini", "ollama", "local"),
+                     "model": string(150)}, ("provider", "model")), 8)},
+                 ("role", "models"), self.configure_model_fallbacks, 2)
+        register(self.registry, "models.health", "Inspect locally recorded model successes, failures and observed latency; never uploads context.",
+                 {}, (), self.model_health)
         register(self.registry, "models.configure_cost", "Set a user-supplied cost per million input tokens for low-cost routing. Unknown pricing stays unknown; explicit role choices take priority.",
                  {"provider_id": enum("openai", "gemini", "ollama", "local"), "model": string(150),
                   "input_cost": {"type": "number", "minimum": 0, "maximum": 1000000}},
@@ -554,12 +669,27 @@ class Services:
                         # reply reserve and image budget; never a reported token count.
                         estimate = sum(len((message.content or "").encode("utf-8")) for message in history)
                         estimate = (estimate + len(schemas.encode("utf-8"))) // 3 + 4096 + 4096 * len(attachments)
-                        choice = self.route_model(task, require_tools=task == "planning",
-                                                  require_vision=bool(attachments), context_tokens=estimate)
+                        choices = self.route_models(task, require_tools=task == "planning",
+                                                    require_vision=bool(attachments), context_tokens=estimate)
+                        choice = choices[0]
                         provider_id, model = choice["provider"], choice["model"]
-                    provider = self.make_provider(provider_id)
-                    if getattr(provider, "is_local", False):
-                        provider.model_info(model)
+                        from jarvix.providers.routed import RoutedProvider
+                        configured = self.settings.get("routing.roles", {}).get(task, {})
+                        local_intent = configured.get("provider") in {"ollama", "local"} or (
+                            not configured and self.routing_options()["prefer_local"])
+                        provider = RoutedProvider(self, choices, approve, on_event,
+                                                  cloud_requires_approval=local_intent)
+                    else:
+                        backend = self.make_provider(provider_id)
+                        provider = backend  # Ensure cleanup even if model validation fails.
+                        if getattr(backend, "is_local", False):
+                            backend.model_info(model)
+                        from jarvix.providers.routed import RoutedProvider
+                        provider = RoutedProvider(self, [{"provider": provider_id, "model": model,
+                            "is_local": getattr(backend, "is_local", False),
+                            "capabilities": ["vision"] if getattr(backend, "supports_vision", False) else []}],
+                            approve, on_event)
+                        provider.backend = backend
                     from jarvix.attachments import disclose_images
                     messages = bounded_history(self.conversation_messages(conversation_id))
                     images = disclose_images(attachments, provider, model, approve, self.repository)
@@ -579,6 +709,8 @@ class Services:
             finally:
                 if hasattr(provider, "close"):
                     provider.close()
+            if provider is not None:
+                provider_id = provider.id
             self.repository.append_message(conversation_id, "assistant", answer)
             self.repository.audit("chat", f"{provider_id}: conversation updated")
             return answer

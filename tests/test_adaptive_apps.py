@@ -32,6 +32,108 @@ def test_adapter_catalog_reuses_host_tools_and_permissions(services):
                                                                   "path": "C:/folder", "command": "evil"})
 
 
+def test_adapter_dispatch_keeps_host_schema_and_sensitive_approval(services, tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(app_adapters.subprocess, "Popen", lambda *a, **kw: calls.append(a))
+    assert services.app_adapters.resolve("explorer", "copy").name == "files.copy"
+    source = tmp_path / "original.txt"
+    source.write_text("original")
+    destination = tmp_path / "copied.txt"
+    denied = services.app_adapters.execute("explorer", "copy", {
+        "source": str(source), "destination": str(destination)}, approve=lambda _: False)
+    assert not denied.ok and not destination.exists()
+    accepted = services.app_adapters.execute("explorer", "copy", {
+        "source": str(source), "destination": str(destination)}, approve=lambda _: True)
+    assert accepted.ok and destination.read_text() == "original"
+    assert not services.app_adapters.execute("explorer", "copy", {
+        "source": str(source), "destination": str(destination), "overwrite": True}, approve=lambda _: True).ok
+    # A remembered normal-control grant must not authorize command execution.
+    services.settings.set("control.enabled", True)
+    services.permissions.set_grant("developer.command_start", "allow")
+    assert not services.app_adapters.execute("terminal", "command_start", {
+        "argv": [sys.executable, "-c", "print('no')"], "cwd": str(tmp_path)}, approve=lambda _: False).ok
+    assert not calls
+    assert not services.app_adapters.execute("unknown", "copy", {}).ok
+
+
+def test_adapter_browser_identity_and_catalog_unavailability(services, monkeypatch):
+    groups = {group["id"]: group for group in services.app_adapters.capabilities()["items"]}
+    downloads = next(a for a in groups["chrome"]["actions"] if a["name"] == "downloads")
+    assert downloads["supported"] and not downloads["available"] and downloads["unavailable_reason"]
+    assert {a["tool"] for a in groups["terminal"]["actions"]} >= {
+        "developer.command_history", "developer.command_output"}
+    calls = []
+    monkeypatch.setattr(services.browser, "status", lambda: {"connected": True, "browser": "chrome"})
+    marker = ToolResult(True, {"items": []})
+    monkeypatch.setattr(services, "execute_tool", lambda name, args, **kw: calls.append((name, args, kw)) or marker)
+    assert not services.app_adapters.execute("edge", "tabs", {}).ok
+    assert calls == []
+    assert services.app_adapters.execute("chrome", "downloads", {"limit": 5}) is marker
+    assert calls[0][:2] == ("browser.downloads", {"limit": 5})
+    services.registry.unregister("browser.downloads")
+    downloads = next(a for group in services.app_adapters.capabilities()["items"] if group["id"] == "chrome"
+                     for a in group["actions"] if a["name"] == "downloads")
+    assert not downloads["supported"] and not downloads["available"]
+
+
+def test_vscode_context_hints_are_redacted_and_git_requires_selected_project(services, tmp_path, monkeypatch):
+    executable = tmp_path / "Code.exe"
+    executable.write_bytes(b"test")
+    app_id = services.add_app("VS Code", str(executable))
+    project_id = services.add_project("Jarvix", str(tmp_path))
+    title = "main.py - Jarvix - Visual Studio Code"
+    monkeypatch.setattr(services.windows, "list", lambda: [{"handle": 123, "process_id": 9, "title": title}])
+    monkeypatch.setattr(app_adapters.psutil, "Process", lambda pid: SimpleNamespace(exe=lambda: str(executable)))
+    services.settings.set("screenshots.enabled", True)
+    elements = [{"runtime_id": str(i), "name": name, "automation_id": "", "control_type": kind,
+                 "focused": i == 0, "password": False, "offscreen": False}
+                for i, (name, kind) in enumerate([("main.py", "TabItem"), ("password=private", "TabItem"),
+                                                ("Terminal", "TabItem"), ("secret.key", "Edit")])]
+    services.desktop.backend = SimpleNamespace(call=lambda *a, **kw: {
+        "root_id": "root", "process_started": "start", "application": "Code", "elements": elements, "bounded": True})
+    calls = []
+    original = services.execute_tool
+    def execute(name, args, **kwargs):
+        if name == "developer.git_status":
+            calls.append((name, args))
+            return ToolResult(True, {"branch": "main"})
+        return original(name, args, **kwargs)
+    monkeypatch.setattr(services, "execute_tool", execute)
+    inspected = services.app_adapters.vscode_context(app_id, 123, 9)
+    assert calls == [] and inspected["git"] is None
+    assert inspected["active_file_hint"] == "main.py" and not inspected["file_paths_verified"]
+    assert [hint["name"] for hint in inspected["editor_tab_hints"]] == ["main.py", "Terminal"]
+    assert "private" not in str(inspected) and not inspected["diagnostics"]["available"]
+    assert inspected["terminal"]["visible"] and not inspected["terminal"]["output_available"]
+    inspected = services.app_adapters.vscode_context(app_id, 123, 9, project_id)
+    assert inspected["git"]["available"] and inspected["project"]["id"] == project_id
+    assert calls == [("developer.git_status", {"path": str(tmp_path)})]
+    services.settings.set("screenshots.enabled", False)
+    with pytest.raises(PermissionError):
+        services.app_adapters.vscode_context(app_id, 123, 9, project_id)
+    assert len(calls) == 1
+
+
+def test_vscode_adapter_does_not_bypass_denied_observation_tools(services, tmp_path, monkeypatch):
+    executable = tmp_path / "Code.exe"
+    executable.write_bytes(b"test")
+    app_id = services.add_app("VS Code", str(executable))
+    services.settings.set("screenshots.enabled", True)
+    monkeypatch.setattr(services.windows, "list", lambda: [{"handle": 123, "process_id": 9, "title": "private.py - Code"}])
+    monkeypatch.setattr(app_adapters.psutil, "Process", lambda pid: SimpleNamespace(exe=lambda: str(executable)))
+    observed = []
+    services.desktop.backend = SimpleNamespace(call=lambda *a, **kw: observed.append(a) or {
+        "root_id": "root", "process_started": "start", "application": "Code", "elements": []})
+    services.permissions.set_grant("desktop.inspect_ui", "deny")
+    args = {"id": app_id, "handle": 123, "process_id": 9}
+    denied = services.execute_tool("adapters.vscode_context", args)
+    assert not denied.ok and "private.py" not in str(denied.data) and not observed
+    services.permissions.set_grant("desktop.inspect_ui", None)
+    services.permissions.set_grant("projects.list", "deny")
+    denied = services.execute_tool("adapters.vscode_context", args)
+    assert not denied.ok and "private.py" not in str(denied.data) and len(observed) == 1
+
+
 def test_vscode_file_arguments_are_fixed_and_root_guarded(services, tmp_path, monkeypatch):
     executable = tmp_path / "Code.exe"
     executable.write_bytes(b"test")
