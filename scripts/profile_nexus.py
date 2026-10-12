@@ -18,17 +18,17 @@ from jarvix.ui.window import MainWindow
 from review_ui import ReviewVault, settle
 
 
-def main():
+def main(interface="nexus"):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--platform", default="offscreen", choices=("offscreen", "windows"))
     args = parser.parse_args()
     app = QApplication(["Jarvix material review", "-platform", args.platform])
     app.setQuitOnLastWindowClosed(False)
     app.setFont(QFont("Segoe UI Variable", 10))
-    output = Path("artifacts/nexus")
+    output = Path("artifacts/liquid" if interface == "new" else "artifacts/nexus")
     output.mkdir(parents=True, exist_ok=True)
     services = Services(output / ("performance-" + uuid.uuid4().hex), vault=ReviewVault())
-    services.settings.set("ui.interface", "nexus")
+    services.settings.set("ui.interface", interface)
     timings = []
     start = time.perf_counter()
     with patch.object(MainWindow, "refresh_system", lambda self: None), patch.object(MainWindow, "run_routines", lambda self: None):
@@ -43,7 +43,7 @@ def main():
                 window.navigate(name)
                 settle(app, window)
                 timings.append({"page": name, "first_navigation_ms": round((time.perf_counter() - begin) * 1000, 2)})
-            services.settings.set("nexus.motion", False)
+            services.settings.set("liquid.motion" if interface == "new" else "nexus.motion", False)
             window.configure_materials()
             available = window.screen().availableGeometry()
             frame_width = window.frameGeometry().width() - window.width()

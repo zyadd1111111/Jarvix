@@ -72,9 +72,9 @@ def test_next_launch_selector_preserves_drafts_attachments_and_pending_confirmat
     permission.show()
     before = {key: services.settings.get(key, False) for key in settings.access_checks}
     pending_page = window.current_page
-    settings.interface_selector.setCurrentIndex(settings.interface_selector.findData("nexus"))
+    settings.interface_selector.setCurrentIndex(settings.interface_selector.findData("new"))
     app.processEvents()
-    assert services.settings.get("ui.interface") == "nexus"
+    assert services.settings.get("ui.interface") == "new"
     assert window.interface_mode == "legacy" and window.services is services
     assert window.pages["Chat"] is chat and window.pages["Notes"] is notes
     assert window.current_page == pending_page and not window.closing
@@ -93,13 +93,13 @@ def test_saved_interface_is_used_after_profile_reopens(app, tmp_path, monkeypatc
     profile = tmp_path / "profile"
     with opened_interface(app, monkeypatch, profile) as legacy:
         selector = legacy.pages["Settings"].interface_selector
-        selector.setCurrentIndex(selector.findData("nexus"))
+        selector.setCurrentIndex(selector.findData("new"))
         assert legacy.interface_mode == "legacy"
-    with opened_interface(app, monkeypatch, profile) as nexus:
-        assert nexus.interface_mode == "nexus"
-        selector = nexus.pages["Settings"].interface_selector
-        selector.setCurrentIndex(selector.findData("legacy"))
-        assert nexus.interface_mode == "nexus"
+    with opened_interface(app, monkeypatch, profile) as new:
+        assert new.interface_mode == "new"
+        selector = new.pages["Settings"].interface_selector
+        selector.setCurrentIndex(selector.findData("old"))
+        assert new.interface_mode == "new"
     with opened_interface(app, monkeypatch, profile) as legacy:
         assert type(legacy) is MainWindow and legacy.styleSheet() == STYLESHEET
 

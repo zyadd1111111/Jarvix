@@ -4,18 +4,18 @@ Jarvix is a local-first desktop AI assistant built with Python, PySide6 and SQLi
 
 ## What's new in 0.9.0
 
-**Two interfaces:** the existing interface is now **Legacy**. **Nexus** is a separate warm-cream desktop with cached frosted materials, a liquid command surface, document-style Chat and focused execution/research panes. Choose **Settings → Appearance → Interface**; the choice applies on the next launch so active work stays open. Both interfaces use the same local profile, services, tools and permissions. Legacy remains the default.
+**OLD and NEW — Nexus:** OLD preserves your existing interface. Nexus uses a separate frontend shell: New Chat, date-grouped history and search above seven primary destinations, with secondary tools in More. Chat flows through an open document workspace with a floating composer and optional context inspector. Choose **Settings → Appearance → Interface → NEW** (shown as **NEXUS** inside Nexus), then restart Jarvix. Both use the same local data, services, tools and permissions; selecting an interface keeps active work open until you restart.
 
-Nexus Appearance controls adjust glass strength, transparency and reduced motion. Local Qt materials work without native blur; supported Windows versions can add [DWM Mica/Acrylic backdrops](https://learn.microsoft.com/en-us/windows/win32/api/dwmapi/ne-dwmapi-dwm_systembackdrop_type). The material renderer samples only its own desktop canvas, never the screen or other applications.
+Nexus includes **Cream, Frost, Graphite and Sand** palettes, covering canvas, glass, typography, controls and semantic states. Appearance changes apply immediately and persist: theme, glass intensity, transparency, density, accent override, motion and Reduced Motion. Navigation, inspectors, focus, dialogs and progress use short, interruptible transitions; Reduced Motion settles them immediately. Local Qt materials work without native blur; supported Windows versions can add [DWM Mica/Acrylic backdrops](https://learn.microsoft.com/en-us/windows/win32/api/dwmapi/ne-dwmapi-dwm_systembackdrop_type). Cached materials sample only Jarvix's own desktop canvas, never other applications. OLD remains the default. [Rendering decisions and source references](docs/liquid-rendering.md).
 
-- A neutral technical theme, Segoe UI Variable typography, consistent SVG controls and grouped, collapsible navigation.
+- Segoe UI Variable typography, consistent SVG controls, grouped collapsible navigation and Ctrl+N / Ctrl+K / Ctrl+, shortcuts.
 - Operator, Missions, Knowledge and Skills open in the main workspace. Projects has its own searchable view using the existing project tools.
-- Home puts commands, current work, today's tasks, model status and recent resources in deliberate sections.
+- Home centers the command surface above Continue, Today and Recent sections. Projects separates files, tasks, knowledge, conversations and activity. Missions has overview, milestones, tasks, resources and history tabs.
 - Chat uses document-style messages, Markdown tables, compact tool activity and expandable details. Attachments, streaming, cancellation and disclosure approvals retain their existing behavior.
 
 ## What got revamped in 0.9
 
-Files uses sortable rows, folder scope and native context menus. System uses compact telemetry and a process table. Integrations shows account status, permissions and connection actions in rows. Settings groups controls by category; workflows, Skills, dialogs and the command overlay share the same restrained controls. The backend and database schema are unchanged.
+Tasks uses compact completion rows with Today, Upcoming, All and Completed views. Notes separates the library, editor and optional metadata. Files uses native file icons, sortable rows, approved-folder navigation and context menus. System separates overview, processes, storage, network and device details. Integrations shows account status, permissions and connection actions in rows. Settings groups controls by category; workflows, Skills, dialogs and the command overlay share the same materials. The backend and database schema are unchanged.
 
 ## What's new in 0.8.0
 

@@ -2,13 +2,14 @@
 
 All notable changes to Jarvix are documented in this file.
 
-## [0.9.0] - 2026-10-05
+## [0.9.0] — Nexus — 2026-10-12
 
-- Rebuilt presentation with neutral design tokens, Segoe UI Variable, consistent SVG icons and grouped collapsible navigation.
-- Main-window Operator, Missions, Knowledge and Skills workspaces; dedicated project rows and inspectors reuse existing actions.
-- Command-focused Home, document-style Chat, compact tool results and category-based Settings.
-- Sortable Files and process tables, native context menus, restrained workflow blocks, account rows and accessible dialogs.
-- Existing backend, storage schema, provider execution and permission enforcement remain unchanged.
+- Preserved OLD and rebuilt NEW/Nexus from a separate frontend shell with New Chat, searchable date-grouped conversation history and contextual inspectors.
+- Added four complete Liquid Glass palettes: Cream, Frost, Graphite and Sand, with persisted material, density and reduced-motion settings.
+- Rebuilt Home, document-style Chat and floating composer, Operator execution timeline, Projects, Missions and three-pane Knowledge workspaces.
+- Added file-manager tables and previews, task views, notes editor, compact app and integration lists, system tables and OS-style Settings.
+- Reused existing streaming, attachments, voice, tools, permissions, services and local data. Backend and database schema remain unchanged.
+- Validation: 866 tests passed, 1 skipped; Ruff clean; 13 packaged startup checks passed. Portable Windows x64 build is unsigned.
 
 ## [0.8.0] - Continuum - 2026-10-02
 

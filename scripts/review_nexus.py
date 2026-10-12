@@ -53,7 +53,7 @@ def seed(services, profile):
     return conversation
 
 
-def capture(app, profile, mode, output, size, conversation, snapshot, *, compare=False):
+def capture(app, profile, mode, output, size, conversation, snapshot, *, compare=False, compare_all=False):
     services = Services(profile, vault=ReviewVault())
     services.settings.set("ui.interface", mode)
     with patch.object(MainWindow, "refresh_system", lambda self: None), patch.object(MainWindow, "run_routines", lambda self: None):
@@ -62,7 +62,7 @@ def capture(app, profile, mode, output, size, conversation, snapshot, *, compare
         window.resize(*size)
         window.show()
         try:
-            for name in (("Chat",) if compare else PAGES):
+            for name in (("Chat",) if compare and not compare_all else PAGES):
                 window.navigate(name)
                 if name == "Chat" and conversation:
                     window.pages[name].load_conversation(conversation)
@@ -73,15 +73,33 @@ def capture(app, profile, mode, output, size, conversation, snapshot, *, compare
                 # Python exceptions in asynchronous Qt slots can otherwise be printed only.
                 window.pages[name].refresh()
                 settle(app, window)
-                if compare:
+                if compare and name == "Chat":
+                    # Compare the same settled viewport, independent of deferred
+                    # Markdown sizing and scroll-to-bottom timers at fractional DPI.
+                    window.pages["Chat"].render_messages()
+                    settle(app, window)
+                    settle(app, window)
+                    window.pages["Chat"].transcript.verticalScrollBar().setValue(0)
                     window.pages["Chat"].composer.setFocus()
+                    for index in range(window.pages["Chat"].history.count()):
+                        item = window.pages["Chat"].history.item(index)
+                        item.setText(item.text().split("\n")[0] + "\nReview timestamp")
                     window.clock_label.setText("Interface comparison")
+                    app.processEvents()
+                elif compare:
+                    window.clock_label.setText("Interface comparison")
+                    app.processEvents()
+                if compare_all and (focus := window.focusWidget()):
+                    # Native activation may arrive at different times after a
+                    # restart. Compare neutral controls; interaction reviews
+                    # separately capture their focused states.
+                    focus.clearFocus()
                     app.processEvents()
                 image = window.grab().toImage()
                 if not image.save(str(output / (name.lower() + ".png"))):
                     raise OSError("Could not save " + name)
                 print(f"{mode} {name}: {window.width()}x{window.height()}", flush=True)
-                if name == "Settings" and not compare:
+                if name == "Settings" and (not compare or compare_all):
                     settings = window.pages[name]
                     appearance = next(i for i in range(settings.categories.count())
                                       if settings.categories.item(i).text() == "Appearance")

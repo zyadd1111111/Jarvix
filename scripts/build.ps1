@@ -29,7 +29,8 @@ try {
     Copy-Item -LiteralPath 'README.md', 'SECURITY.md', 'LICENSE' -Destination 'dist\Jarvix'
     Copy-Item -LiteralPath 'docs' -Destination 'dist\Jarvix' -Recurse -Force
     Copy-Item -LiteralPath 'examples' -Destination 'dist\Jarvix' -Recurse -Force
-    Compress-Archive -LiteralPath 'dist\Jarvix' -DestinationPath $archive -Force
+    & $pythonPath (Join-Path $PSScriptRoot 'create_package_archive.py') (Join-Path $projectRoot 'dist\Jarvix') (Join-Path $projectRoot $archive)
+    if ($LASTEXITCODE -ne 0) { throw 'Archive CRC or SHA256 verification failed.' }
     Write-Host 'Desktop executable: dist\Jarvix\Jarvix.exe'
     Write-Host 'Browser helper: dist\Jarvix\JarvixBrowserHost.exe; extension: dist\Jarvix\browser_extension'
 }
